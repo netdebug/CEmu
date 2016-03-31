@@ -24,8 +24,10 @@ install:
 - sudo apt-get install -qq gcc-4.9 g++-4.9; export CXX="g++-4.9" CC="gcc-4.9"; $CXX --version
 - sudo apt-get install -qq qt55base qt55declarative; source /opt/qt55/bin/qt55-env.sh
 script:
-- echo "=== Coverity Build Log: ==="; cat cov-int/build_log.txt
-- echo "=== Coverity SCM Log: ==="; cat cov-int/scm_log.txt
+- echo "=== Coverity Build Log: ==="
+- cat cov-int/build_log.txt
+- echo "=== Coverity SCM Log: ==="
+- cat cov-int/scm_log.txt
 notifications:
   irc:
     channels:
