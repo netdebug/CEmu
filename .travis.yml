@@ -11,7 +11,7 @@ addons:
     project:
       name: CE-Programming/CEmu
       description: Build submitted via Travis CI
-    build_command_prepend: qmake gui/qt
+    build_command_prepend: cov-configure --comptype gcc --compiler gcc-5; qmake gui/qt
     build_command: make -j4 CC=gcc-5 CXX=g++-5 LINK=g++-5
     branch_pattern: coverity_scan
     notification_email:
