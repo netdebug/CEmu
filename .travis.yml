@@ -16,11 +16,8 @@ addons:
     project:
       name: CE-Programming/CEmu
       description: Build submitted via Travis CI
-    build_command_prepend:
-      - mkdir build_cov
-      - cd build_cov
-      - qmake ../gui/qt
-    build_command: make -j4 CC=gcc-5 CXX=g++-5 LINK=g++-5
+    build_command_prepend: mkdir build_cov; cd build_cov; qmake ../gui/qt
+    build_command: cd build_cov; make -j4 CC=gcc-5 CXX=g++-5 LINK=g++-5
     branch_pattern: coverity_scan
 
 before_install:
