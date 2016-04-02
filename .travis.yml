@@ -11,7 +11,7 @@ addons:
     project:
       name: CE-Programming/CEmu
       description: Build submitted via Travis CI
-    build_command_prepend: cov-configure --comptype gcc --compiler gcc-4.9; qmake gui/qt
+    build_command_prepend: cov-configure --gcc; qmake gui/qt
     build_command: make -j4 CC=gcc-4.9 CXX=g++-4.9 LINK=g++-4.9
     branch_pattern: coverity_scan
     notification_email:
@@ -21,14 +21,17 @@ before_install:
 - sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
 - sudo add-apt-repository ppa:beineri/opt-qt551 -y
 - sudo apt-get update -qq
+
 install:
-- sudo apt-get install -qq gcc-4.9 g++-4.9; export CXX="g++-4.9" CC="gcc-4.9"; $CXX --version
+- sudo apt-get install -qq gcc-4.9 g++-4.9; export CXX="g++-4.9" CC="gcc-4.9"; $CXX --version; g++ --version
 - sudo apt-get install -qq qt55base qt55declarative; source /opt/qt55/bin/qt55-env.sh
-script:
-- echo "=== Coverity Build Log: ==="
-- cat cov-int/build_log.txt
-- echo "=== Coverity SCM Log: ==="
-- cat cov-int/scm_log.txt
+
+before_script:
+- if [[ -e cov-int/build_log.txt ]]; then echo "--- Coverity Build Log: ---"; cat cov-int/build_log.txt; else echo "No Coverity build log found."; fi
+- if [[ -e cov-int/scm_log.txt ]]; then echo "--- Coverity SCM Log: ---"; cat cov-int/scm_log.txt; else echo "No Coverity SCM log found."; fi
+
+script: echo Build complete.
+
 notifications:
   irc:
     channels:
