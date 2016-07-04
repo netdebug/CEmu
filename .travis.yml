@@ -25,8 +25,8 @@ before_install:
 - sudo apt-get update -qq
 
 install:
-- sudo apt-get install -y --force-yes -qq g++-6 gcc-6; export CXX="g++-6" CC="gcc-6"; $CXX --version
-- sudo apt-get install -y --force-yes -qq qt55base qt55declarative; source /opt/qt55/bin/qt55-env.sh
+- sudo apt-get install -y --force-yes --allow-unauthenticated -qq g++-6 gcc-6; export CXX="g++-6" CC="gcc-6"; $CXX --version
+- sudo apt-get install -y --force-yes --allow-unauthenticated -qq qt55base qt55declarative; source /opt/qt55/bin/qt55-env.sh
 
 script:
 - if [[ -e cov-int/build-log.txt ]]; then echo "Coverity Build Log:"; cat cov-int/build-log.txt; else echo "No Coverity build log found."; fi
