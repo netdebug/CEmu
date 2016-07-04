@@ -8,7 +8,7 @@
 #include <QtWidgets/QFileDialog>
 #include <QtCore/QSettings>
 #include <QTextCursor>
-
+#include "cemuopts.h"
 #include "lcdwidget.h"
 #include "romselection.h"
 #include "emuthread.h"
@@ -26,7 +26,8 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *p = 0);
+
+    explicit MainWindow(CEmuOpts opts,QWidget *p = 0);
     ~MainWindow();
 
 public slots:
@@ -53,21 +54,23 @@ public slots:
     void saveToFile();
     void exportRom();
     void changeImagePath();
+    void disableDebugger();
 
 signals:
     // Debugging
     void debuggerChangedState(bool);
     void triggerEmuSendState();
     void debugInputRequested();
+    void debuggerCommand(QString);
+    void setDebugStepInMode();
+    void setDebugStepOverMode();
+    void setDebugStepNextMode();
+    void setDebugStepOutMode();
 
     // Linking
     void setSendState(bool);
     void sendVariable(std::string);
     void setReceiveState(bool);
-    void setDebugStepInMode();
-    void setDebugStepOverMode();
-    void setDebugStepNextMode();
-    void setDebugStepOutMode();
 
     // Speed
     void changedEmuSpeed(int);
@@ -101,6 +104,7 @@ private:
     // Debugger
     void debugCommand();
     void raiseDebugger();
+    void leaveDebugger();
     void updateDebuggerChanges();
     void populateDebugWindow();
     void setDebuggerState(bool);
@@ -108,13 +112,15 @@ private:
     void executeDebugCommand(uint32_t, uint8_t);
     void processDebugCommand(int, uint32_t);
     void addPort();
-    void deletePort();
+    void removePort();
     void updatePortData(int);
+    void updateWatchpointData(int);
     void changePortValues(QTableWidgetItem*);
     void changeBreakpointAddress(QTableWidgetItem*);
     void setPreviousBreakpointAddress(QTableWidgetItem*);
+    void changeWatchpointAddress(QTableWidgetItem*);
+    void setPreviousWatchpointAddress(QTableWidgetItem*);
     void setPreviousPortValues(QTableWidgetItem*);
-    void deleteBreakpoint();
     void drawNextDisassembleLine();
     void stepInPressed();
     void stepOverPressed();
@@ -125,11 +131,19 @@ private:
     void updateDisasmView(const int, const bool);
     void gotoPressed();
     void setBreakpointAddress();
+    void setWatchpointAddress();
     void disasmContextMenu(const QPoint &);
+    void variablesContextMenu(const QPoint&);
     void vatContextMenu(const QPoint &);
     void opContextMenu(const QPoint &);
     void scrollDisasmView(int);
+    void removeBreakpointAddress(QString);
+    void removeWatchpointAddress(QString);
+    void updateDisassembly(int);
+    bool removeBreakpoint();
+    bool removeWatchpoint();
     bool addBreakpoint();
+    bool addWatchpoint();
 
     // Others
     void createLCD();
@@ -147,6 +161,7 @@ private:
     // Console
     void showStatusMsg(QString);
     void consoleOutputChanged();
+    void appendToConsole(QString str, QColor color = Qt::black);
 
     // Settings
     void adjustScreen();
@@ -158,12 +173,21 @@ private:
     int reprintScale(int);
 
     // Linking
-    QStringList showVariableFileDialog(QFileDialog::AcceptMode);
+    QStringList showVariableFileDialog(QFileDialog::AcceptMode, QString name_filter);
     void sendFiles(QStringList);
     void selectFiles();
     void refreshVariableList();
     void variableClicked(QTableWidgetItem*);
     void saveSelected();
+
+    // Autotester
+    void dispAutotesterError(int errCode);
+    int openJSONConfig(const QString& jsonPath);
+    void prepareAndOpenJSONConfig();
+    void reloadJSONConfig();
+    void launchTest();
+    void updateCRCParamsFromPreset(int comboBoxIndex);
+    void refreshCRC();
 
     // Hex Editor
     void flashUpdate();
@@ -210,7 +234,7 @@ private:
     QTextCursor disasmOffset;
     bool disasmOffsetSet;
     bool fromPane;
-    int addressPane;
+    int32_t addressPane;
     int memSize;
 
     QDir currentDir;
@@ -219,14 +243,21 @@ private:
 
     bool debuggerOn = false;
     bool inReceivingMode = false;
-    bool stderrConsole = false;
+    bool native_console = false;
     bool closeAfterSave = false;
     bool isResumed = false;
     bool hexSearch = true;
+    bool canScroll = false;
 
-    uint16_t prevPortAddress;
-    uint32_t prevBreakpointAddress;
-    QString currBreakpointAddress, currPortAddress;
+    CEmuOpts opts;
+
+    uint16_t prevPortAddress = 0;
+    uint32_t prevBreakpointAddress = 0;
+    uint32_t prevWatchpointAddress = 0;
+    uint32_t prevDisasmAddress = 0;
+    uint32_t currAddress = 0;
+    uint8_t watchpointType = 0;
+    QString currAddressString, currPortAddress, watchLength;
     QPalette colorback, nocolorback;
 
     QShortcut *stepInShortcut;
@@ -236,6 +267,11 @@ private:
     QShortcut *debuggerShortcut;
 
     QList<calc_var_t> vars;
+    QIcon runIcon, stopIcon; // help speed up stepping
+    QTextCharFormat console_format;
+
+    int pc_line;
+    int curr_line;
 };
 
 // Used as global instance by EmuThread and Debugger class

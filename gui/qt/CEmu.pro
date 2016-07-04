@@ -5,8 +5,11 @@ if (0) { # GitHub release/deployment build. Has to correspond to the git tag.
     DEFINES += CEMU_VERSION=\\\"1.0\\\"
 } else { # Development build. Used in the about screen
     GIT_VERSION = $$system(git describe --abbrev=7 --dirty --always --tags)
-    DEFINES += CEMU_VERSION=\\\"0.4dev_$$GIT_VERSION\\\"
+    DEFINES += CEMU_VERSION=\\\"0.5dev_$$GIT_VERSION\\\"
 }
+
+# Continuous Integration (variable checked later)
+CI = $$(CI)
 
 # Code beautifying
 DISTFILES += ../../.astylerc
@@ -24,13 +27,23 @@ CONFIG += c++11 console
 # Core options
 DEFINES += DEBUG_SUPPORT
 
+CONFIG(release, debug|release) {
+    #This is a release build
+    DEFINES += QT_NO_DEBUG_OUTPUT
+} else {
+    #This is a debug build
+}
+
 # GCC/clang flags
 if (!win32-msvc*) {
     GLOBAL_FLAGS    += -g3 -W -Wall -Wno-unused-parameter -Werror=shadow -Werror=write-strings -Werror=redundant-decls -Werror=format -Werror=format-security -Werror=declaration-after-statement -Werror=implicit-function-declaration -Werror=date-time -Werror=missing-prototypes -Werror=return-type -Werror=pointer-arith -Winit-self
     GLOBAL_FLAGS    += -ffunction-sections -fdata-sections -fno-strict-overflow
     QMAKE_CFLAGS    += -std=gnu11
     QMAKE_CXXFLAGS  += -fno-exceptions
-    CONFIG(release, debug|release): GLOBAL_FLAGS += -O3 -flto
+    isEmpty(CI) {
+        # Only enable opts and LTO for non-CI release builds
+        CONFIG(release, debug|release): GLOBAL_FLAGS += -O3 -flto
+    }
 } else {
     # TODO: add equivalent flags
     # Example for -Werror=shadow: /weC4456 /weC4457 /weC4458 /weC4459
@@ -67,18 +80,24 @@ SOURCES +=  utils.cpp \
     qtkeypadbridge.cpp \
     qmlbridge.cpp \
     keymap.cpp \
+    datawidget.cpp \
+    lcdpopout.cpp \
+    searchwidget.cpp \
+    basiccodeviewerwindow.cpp \
     qhexedit/chunks.cpp \
     qhexedit/commands.cpp \
     qhexedit/qhexedit.cpp \
+    capture/gif.cpp \
     tivarslib/utils_tivarslib.cpp \
     tivarslib/TypeHandlers/TH_0x00.cpp \
     tivarslib/TypeHandlers/TH_0x05.cpp \
+    ../../tests/autotester/autotester.cpp \
     ../../core/asic.c \
     ../../core/cpu.c \
     ../../core/keypad.c \
     ../../core/lcd.c \
     ../../core/registers.c \
-    ../../core/apb.c \
+    ../../core/port.c \
     ../../core/interrupt.c \
     ../../core/flash.c \
     ../../core/misc.c \
@@ -93,14 +112,11 @@ SOURCES +=  utils.cpp \
     ../../core/mem.c \
     ../../core/link.c \
     ../../core/vat.c \
+    ../../core/emu.c \
+    ../../core/extras.c \
     ../../core/debug/disasm.cpp \
     ../../core/debug/debug.c \
-    ../../core/emu.c \
-    capture/gif.cpp \
-    datawidget.cpp \
-    lcdpopout.cpp \
-    searchwidget.cpp \
-    basiccodeviewerwindow.cpp
+    ../../core/debug/stepping.cpp
 
 linux|macx|ios: SOURCES += ../../core/os/os-linux.c
 win32: SOURCES += ../../core/os/os-win32.c win32-console.cpp
@@ -114,9 +130,15 @@ HEADERS  +=  utils.h \
     qtkeypadbridge.h \
     qmlbridge.h \
     keymap.h \
+    datawidget.h \
+    lcdpopout.h \
+    searchwidget.h \
+    basiccodeviewerwindow.h \
     qhexedit/chunks.h \
     qhexedit/commands.h \
     qhexedit/qhexedit.h \
+    capture/gif.h \
+    capture/giflib.h \
     tivarslib/autoloader.h \
     tivarslib/utils_tivarslib.h \
     tivarslib/TypeHandlers/TypeHandlerFuncGetter.h \
@@ -126,6 +148,7 @@ HEADERS  +=  utils.h \
     tivarslib/TypeHandlers/TH_0x04.h \
     tivarslib/TypeHandlers/TH_0x05.h \
     tivarslib/TypeHandlers/TH_0x06.h \
+    ../../tests/autotester/autotester.h \
     ../../core/asic.h \
     ../../core/cpu.h \
     ../../core/defines.h \
@@ -133,7 +156,7 @@ HEADERS  +=  utils.h \
     ../../core/lcd.h \
     ../../core/registers.h \
     ../../core/tidevices.h \
-    ../../core/apb.h \
+    ../../core/port.h \
     ../../core/interrupt.h \
     ../../core/emu.h \
     ../../core/flash.h \
@@ -149,15 +172,12 @@ HEADERS  +=  utils.h \
     ../../core/mem.h \
     ../../core/link.h \
     ../../core/vat.h \
+    ../../core/extras.h \
+    ../../core/os/os.h \
     ../../core/debug/debug.h \
     ../../core/debug/disasm.h \
-    ../../core/os/os.h \
-    capture/gif.h \
-    capture/giflib.h \
-    datawidget.h \
-    lcdpopout.h \
-    searchwidget.h \
-    basiccodeviewerwindow.h
+    ../../core/debug/stepping.h \
+    cemuopts.h
 
 FORMS    += mainwindow.ui \
     romselection.ui \

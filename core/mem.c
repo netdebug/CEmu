@@ -6,6 +6,11 @@
 #include "cpu.h"
 #include "flash.h"
 #include "control.h"
+#include "debug/debug.h"
+
+#define mmio_mapped(address, select) ((address) < (((select) = (address) >> 6 & 0x4000) ? 0xFB0000 : 0xE40000))
+#define mmio_port(address, select) (0x1000 + (select) + ((address) >> 4 & 0xf000) + ((address) & 0xfff))
+
 
 /* Global MEMORY state */
 mem_state_t mem;
@@ -72,20 +77,30 @@ static uint32_t flash_address(uint32_t address, uint32_t *size) {
     return address;
 }
 
-uint8_t *phys_mem_ptr(uint32_t address, uint32_t size) {
-    uint8_t **block;
+uint8_t *phys_mem_ptr(uint32_t address, int32_t size) {
+    void *block;
     uint32_t block_size, end_addr;
+
     if (address < 0xD00000) {
         address = flash_address(address, &block_size);
-        block = &mem.flash.block;
-    } else {
+        block = mem.flash.block;
+    } else if (address < 0xE00000) {
         address -= 0xD00000;
-        block = &mem.ram.block;
+        block = mem.ram.block;
         block_size = ram_size;
+    } else {
+        address -= 0xE30800;
+        // TODO: Handle some other MMIO things
+        block = lcd.crsrImage;
+        block_size = sizeof(lcd.crsrImage);
+    }
+    if (size < 0) {
+        address += size;
+        size = -size;
     }
     end_addr = address + size;
-    if (address <= end_addr && address <= block_size && end_addr <= block_size && *block) {
-        return *block + address;
+    if (address <= end_addr && address <= block_size && end_addr <= block_size && block) {
+        return (uint8_t *)block + address;
     }
     return NULL;
 }
@@ -341,11 +356,11 @@ static void flash_write_handler(uint32_t address, uint8_t byte) {
 uint8_t mem_read_byte(uint32_t address) {
     static const uint8_t mmio_readcycles[0x20] = {2,2,4,3,2,2,2,2,2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2};
     uint8_t value = 0;
-    uint32_t ramAddress;
+    uint32_t ramAddress, select;
 
     address &= 0xFFFFFF;
 #ifdef DEBUG_SUPPORT
-    if (debugger.data.block[address] & DBG_READ_BREAKPOINT) {
+    if (debugger.data.block[address] & DBG_READ_WATCHPOINT) {
         open_debugger(HIT_READ_BREAKPOINT, address);
     }
 #endif
@@ -373,7 +388,9 @@ uint8_t mem_read_byte(uint32_t address) {
         /* MMIO <-> Advanced Perphrial Bus */
         case 0xE: case 0xF:
             cpu.cycles += mmio_readcycles[(address >> 16) & 0x1F];
-            value = (address > 0xFAFFFF) ? 0 : port_read_byte(mmio_range(address)<<12 | addr_range(address));
+            if (mmio_mapped(address, select)) {
+                value = port_read_byte(mmio_port(address, select));
+            }
             break;
     }
     return value;
@@ -381,7 +398,7 @@ uint8_t mem_read_byte(uint32_t address) {
 
 void mem_write_byte(uint32_t address, uint8_t value) {
     static const uint8_t mmio_writecycles[0x20] = {2,2,4,2,2,2,2,2,2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2};
-    uint32_t ramAddress;
+    uint32_t ramAddress, select;
     address &= 0xFFFFFF;
 
     switch((address >> 20) & 0xF) {
@@ -390,6 +407,7 @@ void mem_write_byte(uint32_t address, uint8_t value) {
         case 0x4: case 0x5: case 0x6: case 0x7:
             if (mem.flash.locked && cpu.registers.PC >= control.privileged) {
                 cpu_nmi();
+                gui_console_printf("[CEmu] NMI triggered (write to flash using unprivileged region)\n");
             } else {
                 flash_write_handler(address, value);
             }
@@ -416,33 +434,79 @@ void mem_write_byte(uint32_t address, uint8_t value) {
             if (address >= DBG_PORT_RANGE) {
                 open_debugger(address, value);
                 break;
-            } else if ((address >= DBGOUT_PORT_RANGE && address < DBGOUT_PORT_RANGE+SIZEOF_DBG_BUFFER-1) ||
-                       (address >= DBGERR_PORT_RANGE && address < DBGERR_PORT_RANGE+SIZEOF_DBG_BUFFER-1)) {
-                debugger.buffer[debugger.currentBuffPos] = (char)value;
-                debugger.currentBuffPos = (debugger.currentBuffPos + 1) % (SIZEOF_DBG_BUFFER);
-                if (value == 0) {
-                    unsigned x;
-                    debugger.currentBuffPos = 0;
-                    if (address >= DBGERR_PORT_RANGE) {
-                        gui_console_err_printf("%s",debugger.buffer);
-                    } else {
-                        gui_console_printf("%s",debugger.buffer);
-                    }
-                    for(x=0; x<6; x++) {
-                        gui_emu_sleep();
-                    }
+            } else if ((address >= DBGOUT_PORT_RANGE && address < DBGOUT_PORT_RANGE+SIZEOF_DBG_BUFFER-1)) {
+                if (value != 0) {
+                    debugger.buffer[debugger.currentBuffPos] = (char)value;
+                    debugger.currentBuffPos = (debugger.currentBuffPos + 1) % (SIZEOF_DBG_BUFFER);
+                }
+                break;
+            } else if ((address >= DBGERR_PORT_RANGE && address < DBGERR_PORT_RANGE+SIZEOF_DBG_BUFFER-1)) {
+                if (value != 0) {
+                    debugger.errBuffer[debugger.currentErrBuffPos] = (char)value;
+                    debugger.currentErrBuffPos = (debugger.currentErrBuffPos + 1) % (SIZEOF_DBG_BUFFER);
                 }
                 break;
             }
 #endif
-            port_write_byte(mmio_range(address)<<12 | addr_range(address), value);
+            if (mmio_mapped(address, select)) {
+                port_write_byte(mmio_port(address, select), value);
+            }
             break;
     }
+
+    if (cpu.registers.PC >= control.privileged && address == control.stackLimit) {
+        cpu_nmi();
+        gui_console_printf("[CEmu] NMI triggered (tried to write on the stack limit)\n");
+    }
+
 #ifdef DEBUG_SUPPORT
-    if ((debugger.data.block[address] &= ~(DBG_INST_START_MARKER | DBG_INST_MARKER)) & DBG_WRITE_BREAKPOINT) {
+    if ((debugger.data.block[address] &= ~(DBG_INST_START_MARKER | DBG_INST_MARKER)) & DBG_WRITE_WATCHPOINT) {
         open_debugger(HIT_WRITE_BREAKPOINT, address);
     }
 #endif
+}
+
+uint8_t mem_peek_byte(uint32_t address) {
+    uint8_t *ptr, value = 0;
+    uint32_t select;
+    address &= 0xFFFFFF;
+    if (address < 0xE00000) {
+        if ((ptr = phys_mem_ptr(address, 1))) {
+            value = *ptr;
+        }
+    } else if (mmio_mapped(address, select)) {
+        value = port_peek_byte(mmio_port(address, select));
+    }
+    return value;
+}
+uint16_t mem_peek_short(uint32_t address) {
+    return mem_peek_byte(address)
+         | mem_peek_byte(address + 1) << 8;
+}
+uint32_t mem_peek_long(uint32_t address) {
+    return mem_peek_byte(address)
+         | mem_peek_byte(address + 1) << 8
+         | mem_peek_byte(address + 2) << 16;
+}
+uint32_t mem_peek_word(uint32_t address, bool mode) {
+    if(mode) {
+        return mem_peek_long(address);
+    } else {
+        return (uint32_t)mem_peek_short((address & 0xFFFF) | (cpu.registers.MBASE << 16));
+    }
+}
+
+void mem_poke_byte(uint32_t address, uint8_t value) {
+    uint8_t *ptr;
+    uint32_t select;
+    address &= 0xFFFFFF;
+    if (address < 0xE00000) {
+        if ((ptr = phys_mem_ptr(address, 1))) {
+            *ptr = value;
+        }
+    } else if (mmio_mapped(address, select)) {
+        port_poke_byte(mmio_port(address, select), value);
+    }
 }
 
 bool mem_save(emu_image *s) {

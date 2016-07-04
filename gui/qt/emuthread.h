@@ -3,7 +3,6 @@
 
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
-#include <QtCore/QElapsedTimer>
 
 #include <chrono>
 
@@ -25,7 +24,8 @@ public:
 
 signals:
     // Debugger
-    void debuggerEntered();
+    void raiseDebugger();
+    void disableDebugger();
     void sendDebugCommand(int, uint32_t);
     void debugInputRequested(bool);
 
@@ -82,8 +82,7 @@ private:
     bool enterSendState = false;
     bool enterReceiveState = false;
     bool throttleOn = true;
-    QElapsedTimer updateTimer;
-    qint64 lastTime;
+    std::chrono::steady_clock::time_point lastTime;
     std::string exportRomPath;
     volatile bool saveImage = false;
     volatile bool saveRom = false;

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015
+/* Copyright (C) 2015-2016
  * Parts derived from Firebird by Fabian Vogt
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,12 +20,20 @@
 #include <QtWidgets/QShortcut>
 #include <QtWidgets/QProgressDialog>
 #include <QtWidgets/QInputDialog>
+#include <QtWidgets/QComboBox>
 #include <QtQuickWidgets/QQuickWidget>
 #include <QtWidgets/QScrollBar>
 #include <QtGui/QFont>
 #include <QtGui/QPixmap>
 
 #include <fstream>
+
+#ifdef _MSC_VER
+    #include <direct.h>
+    #define chdir _chdir
+#else
+    #include <unistd.h>
+#endif
 
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
@@ -37,7 +45,7 @@
 #include "qtkeypadbridge.h"
 #include "searchwidget.h"
 #include "basiccodeviewerwindow.h"
-
+#include "cemuopts.h"
 #include "utils.h"
 #include "capture/gif.h"
 
@@ -46,10 +54,15 @@
 #include "../../core/link.h"
 #include "../../core/os/os.h"
 
+#include "../../tests/autotester/crc32.hpp"
+#include "../../tests/autotester/autotester.h"
+
 static const constexpr int WindowStateVersion = 0;
 
-MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
-    // Setup the UI
+MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::MainWindow) {
+    opts = cliOpts;
+
+    // Setup the UI1
     ui->setupUi(this);
     ui->centralWidget->hide();
     ui->statusBar->addWidget(&statusLabel);
@@ -59,7 +72,7 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     ui->console->setMaximumBlockCount(2000);
 
     // Register QtKeypadBridge for the virtual keyboard functionality
-    this->installEventFilter(&qt_keypad_bridge);
+    installEventFilter(&qt_keypad_bridge);
     ui->lcdWidget->installEventFilter(&qt_keypad_bridge);
     // Same for all the tabs/docks (iterate over them instead of harcoding their names)
     for (const auto& tab : ui->tabWidget->children()[0]->children()) {
@@ -81,22 +94,26 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     connect(ui->radioStderr, &QRadioButton::clicked, this, &MainWindow::consoleOutputChanged);
 
     // Debugger
-    connect(ui->buttonRun, &QPushButton::clicked, this, &MainWindow::changeDebuggerState);
-    connect(this, &MainWindow::debuggerChangedState, &emu, &EmuThread::setDebugMode);
-    connect(&emu, &EmuThread::debuggerEntered, this, &MainWindow::raiseDebugger, Qt::QueuedConnection);
+    connect(&emu, &EmuThread::raiseDebugger, this, &MainWindow::raiseDebugger, Qt::QueuedConnection);
+    connect(&emu, &EmuThread::disableDebugger, this, &MainWindow::disableDebugger, Qt::QueuedConnection);
     connect(&emu, &EmuThread::sendDebugCommand, this, &MainWindow::processDebugCommand, Qt::QueuedConnection);
-    connect(ui->buttonAddPort, &QPushButton::clicked, this, &MainWindow::addPort);
-    connect(ui->buttonDeletePort, &QPushButton::clicked, this, &MainWindow::deletePort);
-    connect(ui->buttonAddBreakpoint, &QPushButton::clicked, this, &MainWindow::addBreakpoint);
-    connect(ui->buttonRemoveBreakpoint, &QPushButton::clicked, this, &MainWindow::deleteBreakpoint);
-    connect(ui->buttonStepIn, &QPushButton::clicked, this, &MainWindow::stepInPressed);
+    connect(this, &MainWindow::debuggerChangedState, &emu, &EmuThread::setDebugMode);
     connect(this, &MainWindow::setDebugStepInMode, &emu, &EmuThread::setDebugStepInMode);
-    connect(ui->buttonStepOver, &QPushButton::clicked, this, &MainWindow::stepOverPressed);
     connect(this, &MainWindow::setDebugStepOverMode, &emu, &EmuThread::setDebugStepOverMode);
-    connect(ui->buttonStepNext, &QPushButton::clicked, this, &MainWindow::stepNextPressed);
     connect(this, &MainWindow::setDebugStepNextMode, &emu, &EmuThread::setDebugStepNextMode);
-    connect(ui->buttonStepOut, &QPushButton::clicked, this, &MainWindow::stepOutPressed);
     connect(this, &MainWindow::setDebugStepOutMode, &emu, &EmuThread::setDebugStepOutMode);
+    connect(ui->buttonRun, &QPushButton::clicked, this, &MainWindow::changeDebuggerState);
+    connect(ui->tabDebugging, &QTabWidget::currentChanged, this, &MainWindow::updateDisassembly);
+    connect(ui->buttonAddPort, &QPushButton::clicked, this, &MainWindow::addPort);
+    connect(ui->buttonRemovePort, &QPushButton::clicked, this, &MainWindow::removePort);
+    connect(ui->buttonAddBreakpoint, &QPushButton::clicked, this, &MainWindow::addBreakpoint);
+    connect(ui->buttonRemoveBreakpoint, &QPushButton::clicked, this, &MainWindow::removeBreakpoint);
+    connect(ui->buttonAddWatchpoint, &QPushButton::clicked, this, &MainWindow::addWatchpoint);
+    connect(ui->buttonRemoveWatchpoint, &QPushButton::clicked, this, &MainWindow::removeWatchpoint);
+    connect(ui->buttonStepIn, &QPushButton::clicked, this, &MainWindow::stepInPressed);
+    connect(ui->buttonStepOver, &QPushButton::clicked, this, &MainWindow::stepOverPressed);
+    connect(ui->buttonStepNext, &QPushButton::clicked, this, &MainWindow::stepNextPressed);
+    connect(ui->buttonStepOut, &QPushButton::clicked, this, &MainWindow::stepOutPressed);
     connect(ui->buttonGoto, &QPushButton::clicked, this, &MainWindow::gotoPressed);
     connect(ui->disassemblyView, &QWidget::customContextMenuRequested, this, &MainWindow::disasmContextMenu);
     connect(ui->vatView, &QWidget::customContextMenuRequested, this, &MainWindow::vatContextMenu);
@@ -105,6 +122,8 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     connect(ui->portView, &QTableWidget::itemPressed, this, &MainWindow::setPreviousPortValues);
     connect(ui->breakpointView, &QTableWidget::itemChanged, this, &MainWindow::changeBreakpointAddress);
     connect(ui->breakpointView, &QTableWidget::itemPressed, this, &MainWindow::setPreviousBreakpointAddress);
+    connect(ui->watchpointView, &QTableWidget::itemChanged, this, &MainWindow::changeWatchpointAddress);
+    connect(ui->watchpointView, &QTableWidget::itemPressed, this, &MainWindow::setPreviousWatchpointAddress);
     connect(ui->checkCharging, &QCheckBox::toggled, this, &MainWindow::changeBatteryCharging);
     connect(ui->sliderBattery, &QSlider::valueChanged, this, &MainWindow::changeBatteryStatus);
     connect(ui->disassemblyView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scrollDisasmView);
@@ -122,6 +141,14 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     connect(ui->buttonRefreshList, &QPushButton::clicked, this, &MainWindow::refreshVariableList);
     connect(this, &MainWindow::setReceiveState, &emu, &EmuThread::setReceiveState);
     connect(ui->buttonReceiveFiles, &QPushButton::clicked, this, &MainWindow::saveSelected);
+
+    // Autotester
+    connect(ui->buttonOpenJSONconfig, &QPushButton::clicked, this, &MainWindow::prepareAndOpenJSONConfig);
+    connect(ui->buttonReloadJSONconfig, &QPushButton::clicked, this, &MainWindow::reloadJSONConfig);
+    connect(ui->buttonLaunchTest, &QPushButton::clicked, this, &MainWindow::launchTest);
+    connect(ui->comboBoxPresetCRC, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, &MainWindow::updateCRCParamsFromPreset);
+
+    connect(ui->buttonRefreshCRC, &QPushButton::clicked, this, &MainWindow::refreshCRC);
 
     // Toolbar Actions
     connect(ui->actionSetup, &QAction::triggered, this, &MainWindow::runSetup);
@@ -170,6 +197,8 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     connect(ui->ramBytes, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), ui->ramEdit, &QHexEdit::setBytesPerLine);
     connect(ui->memBytes, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), ui->memEdit, &QHexEdit::setBytesPerLine);
     connect(ui->emuVarView, &QTableWidget::itemDoubleClicked, this, &MainWindow::variableClicked);
+    ui->emuVarView->setContextMenuPolicy(Qt::CustomContextMenu); // To handle right-clicks
+    connect(ui->emuVarView, &QWidget::customContextMenuRequested, this, &MainWindow::variablesContextMenu);
 
     // Hex Editor
     connect(ui->buttonFlashGoto, &QPushButton::clicked, this, &MainWindow::flashGotoPressed);
@@ -223,6 +252,8 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     setAcceptDrops(true);
     debuggerOn = false;
 
+    autotester::stepCallback = []() { QApplication::processEvents(); };
+
     settings = new QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/CEmu/cemu_config.ini"), QSettings::IniFormat);
 
 #ifdef _WIN32
@@ -271,33 +302,50 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow) {
     ui->emuVarView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->vatView->cursorState(true);
     ui->opView->cursorState(true);
+    ui->opView->updateAllHighlights();
+    ui->vatView->updateAllHighlights();
+
+    debugger_init();
 
     if (!fileExists(emu.rom)) {
         if (!runSetup()) {
             exit(0);
         }
-    }
-
-    if(settings->value(QStringLiteral("restoreOnOpen")).toBool()) {
-        if (fileExists(emu.imagePath)) {
+    } else {
+        if(settings->value(QStringLiteral("restoreOnOpen")).toBool() && fileExists(emu.imagePath) && opts.restoreOnOpen ) {
             restoreEmuState();
         } else {
-           emu.start();
+            emu.start();
         }
-    } else {
-        emu.start();
     }
 
     speedUpdateTimer.start();
     speedUpdateTimer.setInterval(1000 / 4);
-
-    debugger_init();
 
     colorback.setColor(QPalette::Base, QColor(Qt::yellow).lighter(160));
     nocolorback.setColor(QPalette::Base, QColor(Qt::white));
     alwaysOnTop(settings->value(QStringLiteral("onTop"), 0).toUInt());
     restoreGeometry(settings->value(QStringLiteral("windowGeometry")).toByteArray());
     restoreState(settings->value(QStringLiteral("windowState")).toByteArray(), WindowStateVersion);
+    console_format = ui->console->currentCharFormat();
+
+    QPixmap pix;
+
+    pix.load(":/icons/resources/icons/stop.png");
+    stopIcon.addPixmap(pix);
+    pix.load(":/icons/resources/icons/run.png");
+    runIcon.addPixmap(pix);
+
+    if (opts.AutotesterFile != ""){
+        if(openJSONConfig(opts.AutotesterFile)==0)
+        {
+           resetCalculator();
+           //Race condition requires this. Else We hand onsending files.
+           QThread::msleep(500);
+           launchTest();
+        }
+   }
+
 }
 
 MainWindow::~MainWindow() {
@@ -428,7 +476,7 @@ void MainWindow::saved(bool success) {
 
 void MainWindow::dropEvent(QDropEvent *e) {
     const QMimeData* mime_data = e->mimeData();
-    if(!mime_data->hasUrls()) {
+    if (!mime_data->hasUrls()) {
         return;
     }
 
@@ -441,7 +489,7 @@ void MainWindow::dropEvent(QDropEvent *e) {
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *e) {
-    if(e->mimeData()->hasUrls() == false) {
+    if (e->mimeData()->hasUrls() == false || inReceivingMode) {
         return e->ignore();
     }
 
@@ -478,7 +526,7 @@ void MainWindow::closeEvent(QCloseEvent *e) {
         refreshVariableList();
     }
 
-    if (!closeAfterSave && settings->value(QStringLiteral("saveOnClose")).toBool()) {
+    if (!closeAfterSave && settings->value(QStringLiteral("saveOnClose")).toBool() && opts.restoreOnOpen) {
             closeAfterSave = true;
             qDebug("Saving...");
             saveEmuState();
@@ -495,23 +543,29 @@ void MainWindow::closeEvent(QCloseEvent *e) {
     QMainWindow::closeEvent(e);
 }
 
+void MainWindow::appendToConsole(QString str, QColor color) {
+    QTextCursor cur(ui->console->document());
+    cur.movePosition(QTextCursor::End);
+    console_format.setForeground(color);
+    cur.insertText(str, console_format);
+    if (ui->checkAutoScroll->isChecked()) {
+        ui->console->setTextCursor(cur);
+    }
+}
+
 void MainWindow::consoleStr(QString str) {
-    if (stderrConsole) {
+    if (native_console) {
         fputs(str.toStdString().c_str(), stdout);
     } else {
-        ui->console->moveCursor(QTextCursor::End);
-        ui->console->insertPlainText(str);
-        ui->console->moveCursor(QTextCursor::End);
+        appendToConsole(str);
     }
 }
 
 void MainWindow::errConsoleStr(QString str) {
-    if (stderrConsole) {
+    if (native_console) {
         fputs(str.toStdString().c_str(), stderr);
     } else {
-        ui->console->moveCursor(QTextCursor::End);
-        ui->console->insertPlainText("[ERROR] "+str);
-        ui->console->moveCursor(QTextCursor::End);
+        appendToConsole(str, Qt::red);
     }
 }
 
@@ -538,6 +592,12 @@ bool MainWindow::runSetup() {
     if (emu.rom.empty()) {
         return false;
     } else {
+        if (inReceivingMode) {
+            refreshVariableList();
+        }
+        if(debuggerOn) {
+            changeDebuggerState();
+        }
         settings->setValue(QStringLiteral("romImage"), QVariant(emu.rom.c_str()));
         if(emu.stop()) {
             speedUpdateTimer.stop();
@@ -831,7 +891,7 @@ void MainWindow::changeEmulatedSpeed(int value) {
 }
 
 void MainWindow::consoleOutputChanged() {
-    stderrConsole = ui->radioStderr->isChecked();
+    native_console = ui->radioStderr->isChecked();
 }
 
 void MainWindow::isBusy(bool busy) {
@@ -874,14 +934,14 @@ void MainWindow::alwaysOnTop(int state) {
 /* Linking Things                                   */
 /* ================================================ */
 
-QStringList MainWindow::showVariableFileDialog(QFileDialog::AcceptMode mode) {
+QStringList MainWindow::showVariableFileDialog(QFileDialog::AcceptMode mode, QString name_filter) {
     QFileDialog dialog(this);
     int good;
 
     dialog.setAcceptMode(mode);
     dialog.setFileMode(mode == QFileDialog::AcceptOpen ? QFileDialog::ExistingFiles : QFileDialog::AnyFile);
     dialog.setDirectory(currentDir);
-    dialog.setNameFilter(tr("TI Variable (*.8xp *.8xv *.8xl *.8xn *.8xm *.8xy *.8xg *.8xs *.8ci *.8xd *.8xw *.8xc *.8xl *.8xz *.8xt *.8ca);;All Files (*.*)"));
+    dialog.setNameFilter(name_filter);
     dialog.setDefaultSuffix("8xg");
     good = dialog.exec();
 
@@ -940,15 +1000,14 @@ void MainWindow::selectFiles() {
        return;
     }
 
-    QStringList fileNames = showVariableFileDialog(QFileDialog::AcceptOpen);
+    QStringList fileNames = showVariableFileDialog(QFileDialog::AcceptOpen, tr("TI Variable (*.8xp *.8xv *.8xl *.8xn *.8xm *.8xy *.8xg *.8xs *.8xd *.8xw *.8xc *.8xl *.8xz *.8xt *.8ca, *.8cg, *.8ci, *.8ek);;All Files (*.*)"));
 
     sendFiles(fileNames);
 }
 
 void MainWindow::variableClicked(QTableWidgetItem *item) {
-    // TODO: find the correct one according to name+type (needed when the table is sortable)
-    const calc_var_t& var_tmp = vars[item->row()];
-    if (!calc_var_is_asmprog(&var_tmp) && !calc_var_is_internal(&var_tmp)) {
+    const calc_var_t& var_tmp = vars[ui->emuVarView->item(item->row(), 0)->data(Qt::UserRole).toInt()];
+    if (!calc_var_is_asmprog(&var_tmp) && (!calc_var_is_internal(&var_tmp) || var_tmp.name[0] == '#')) {
         BasicCodeViewerWindow codePopup;
         codePopup.setOriginalCode((var_tmp.size <= 500) ? ui->emuVarView->item(item->row(), 3)->text() : QString::fromStdString(calc_var_content_string(var_tmp)));
         codePopup.setVariableName(ui->emuVarView->item(item->row(), 0)->text());
@@ -997,15 +1056,16 @@ void MainWindow::refreshVariableList() {
                 if (calc_var_is_asmprog(&var)) {
                     var_value = tr("Can't preview ASM");
                     var_preview_needs_gray = true;
-                } else if (calc_var_is_internal(&var)) {
-                    var_value = tr("Can't preview internal OS variables");
+                } else if (calc_var_is_internal(&var) && var.name[0] != '#') { // # is previewable
+                    var_value = tr("Can't preview this OS variable");
                     var_preview_needs_gray = true;
-                } else if (var.size > 500) {
+                } else if (var.type == CALC_VAR_TYPE_APP_VAR || var.size > 500) {
                     var_value = tr("[Double-click to view...]");
                 } else {
                     var_value = QString::fromStdString(calc_var_content_string(var));
                 }
 
+                // Do not translate - things rely on those names.
                 QString var_type_str = calc_var_type_names[var.type];
                 if (calc_var_is_asmprog(&var)) {
                     var_type_str += " (ASM)";
@@ -1015,6 +1075,9 @@ void MainWindow::refreshVariableList() {
                 QTableWidgetItem *var_type = new QTableWidgetItem(var_type_str);
                 QTableWidgetItem *var_size = new QTableWidgetItem(QString::number(var.size));
                 QTableWidgetItem *var_preview = new QTableWidgetItem(var_value);
+
+                // Attach var index (hidden) to the name. Needed elsewhere
+                var_name->setData(Qt::UserRole, currentRow);
 
                 var_name->setCheckState(Qt::Unchecked);
 
@@ -1028,6 +1091,10 @@ void MainWindow::refreshVariableList() {
                 ui->emuVarView->setItem(currentRow, 3, var_preview);
             }
         }
+        ui->emuVarView->resizeColumnsToContents();
+        ui->emuVarView->horizontalHeader()->setStretchLastSection(true);
+        ui->emuVarView->setVisible(false);  // This is needed
+        ui->emuVarView->setVisible(true);   // to refresh
     }
 
     ui->emuVarView->blockSignals(false);
@@ -1035,19 +1102,69 @@ void MainWindow::refreshVariableList() {
 }
 
 void MainWindow::saveSelected() {
+    uint8_t i;
+    constexpr const char* var_extension[] = {
+        "8xn",  // 00
+        "8xl",
+        "8xm",
+        "8xy",
+        "8xs",
+        "8xp",
+        "8xp",
+        "8ci",
+        "8xd",  // 08
+        "",
+        "",
+        "8xw",  // 0B
+        "8xc",
+        "8xl",  // 0D
+        "",
+        "8xw",  // 0F
+        "8xz",  // 10
+        "8xt",  // 11
+        "",
+        "",
+        "",
+        "8xv",  // 15
+        "",
+        "8cg",  // 17
+        "8xn",  // 18
+        "",
+        "8ca",  // 1A
+        "8xc",
+        "8xn",
+        "8xc",
+        "8xc",
+        "8xc",
+        "8xn",
+        "8xn",  // 21
+        "",
+        "8pu",  // 23
+        "8ek",  // 24
+        "",
+        "",
+        "",
+        "",
+    };
+
     setReceiveState(true);
 
     QVector<calc_var_t> selectedVars;
+    QStringList fileNames;
     for (int currentRow = 0; currentRow < ui->emuVarView->rowCount(); currentRow++) {
         if (ui->emuVarView->item(currentRow, 0)->checkState()) {
             selectedVars.append(vars[currentRow]);
         }
     }
-    if (selectedVars.size() < 1)
-    {
+    if (selectedVars.size() < 1) {
         QMessageBox::warning(this, tr("No transfer to do"), tr("Select at least one file to transfer"));
     } else {
-        QStringList fileNames = showVariableFileDialog(QFileDialog::AcceptSave);
+        if (selectedVars.size() == 1) {
+            i = selectedVars.at(0).type1;
+            fileNames = showVariableFileDialog(QFileDialog::AcceptSave, "TI "+QString(calc_var_type_names[i])+" (*."+var_extension[i]+");;All Files (*.*)");
+        } else {
+            fileNames = showVariableFileDialog(QFileDialog::AcceptSave, tr("TI Group (*.8cg);;All Files (*.*)"));
+        }
         if (fileNames.size() == 1) {
             if (!receiveVariableLink(selectedVars.size(), selectedVars.constData(), fileNames.at(0).toUtf8())) {
                 QMessageBox::warning(this, tr("Failed Transfer"), tr("A failure occured during transfer of: ")+fileNames.at(0));
@@ -1055,6 +1172,181 @@ void MainWindow::saveSelected() {
         }
     }
 }
+
+/* ================================================ */
+/* Autotester Things                                */
+/* ================================================ */
+
+void MainWindow::dispAutotesterError(int errCode) {
+    QString errMsg;
+    switch (errCode) {
+        case -1:
+            errMsg = tr("Error. No config loaded");
+            break;
+        case 1:
+            errMsg = tr("Error. Couldn't follow the test sequence defined in the configuration");
+            break;
+        default:
+            errMsg = tr("Error. Unknown one - wat?");
+            break;
+    }
+    QMessageBox::warning(this, tr("Autotester error"), errMsg);
+}
+
+
+int MainWindow::openJSONConfig(const QString& jsonPath) {
+    std::string jsonContents;
+    std::ifstream ifs(jsonPath.toStdString());
+
+    if (ifs.good())
+    {
+        ui->buttonReloadJSONconfig->setEnabled(true);
+        chdir(QDir::toNativeSeparators(QFileInfo(jsonPath).absoluteDir().path()).toStdString().c_str());
+        std::getline(ifs, jsonContents, '\0');
+        if (!ifs.eof()) {
+            QMessageBox::warning(this, tr("File error"), tr("Couldn't read JSON file."));
+            return 0;
+        }
+    } else {
+        ui->buttonReloadJSONconfig->setEnabled(false);
+        QMessageBox::warning(this, tr("Opening error"), tr("Unable to open the file."));
+        return 1;
+    }
+
+    autotester::ignoreROMfield = true;
+    autotester::debugLogs = false;
+    if (autotester::loadJSONConfig(jsonContents))
+    {
+        ui->JSONconfigPath->setText(jsonPath);
+        ui->buttonLaunchTest->setEnabled(true);
+        std::cout << "[OK] Test config loaded and verified. " << autotester::config.hashes.size() << " unique tests found." << std::endl;
+    } else {
+        QMessageBox::warning(this, tr("JSON format error"), tr("Error. See the test config file format and make sure values are correct and referenced files are there."));
+        return 1;
+    }
+    return 0;
+}
+
+void MainWindow::prepareAndOpenJSONConfig() {
+    QFileDialog dialog(this);
+
+    ui->buttonLaunchTest->setEnabled(false);
+
+    dialog.setDirectory(QDir::homePath());
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setNameFilter(QStringLiteral("JSON config (*.json)"));
+    if (!dialog.exec()) {
+        return;
+    }
+
+    openJSONConfig(dialog.selectedFiles().at(0));
+}
+
+void MainWindow::reloadJSONConfig() {
+    openJSONConfig(ui->JSONconfigPath->text());
+}
+
+void MainWindow::launchTest() {
+    if (!autotester::configLoaded) {
+        dispAutotesterError(-1);
+        return;
+    }
+
+    if (ui->checkBoxTestReset->isChecked()) {
+        resetCalculator();
+        QThread::msleep(1000);
+    }
+
+    if (ui->checkBoxTestClear->isChecked()) {
+        // Clear home screen
+        autotester::sendKey(0x09);
+    }
+
+    QStringList filesList;
+    for (const auto& file : autotester::config.transfer_files) {
+        filesList << QString::fromStdString(file);
+    }
+    sendFiles(filesList);
+    QThread::msleep(200);
+
+    // Follow the sequence
+    if (!autotester::doTestSequence()) {
+        dispAutotesterError(1);
+        return;
+    }
+    if(!opts.suppressTestDialog) {
+        QMessageBox::information(this, tr("Test results"), QString(tr("Out of %2 tests attempted:\n%4 passed\n%6 failed")).arg(QString::number(autotester::hashesTested), QString::number(autotester::hashesPassed), QString::number(autotester::hashesFailed)));
+    }
+}
+
+void MainWindow::updateCRCParamsFromPreset(int comboBoxIndex) {
+    // The order matters, here! (See the combobox in the GUI)
+    static const std::pair<unsigned int, unsigned int> mapIdConsts[] = {
+        std::make_pair(autotester::hash_consts.at("vram_start"),     autotester::hash_consts.at("vram_16_size")),
+        std::make_pair(autotester::hash_consts.at("vram_start"),     autotester::hash_consts.at("vram_8_size")),
+        std::make_pair(autotester::hash_consts.at("vram2_start"),    autotester::hash_consts.at("vram_8_size")),
+        std::make_pair(autotester::hash_consts.at("textShadow"),     autotester::hash_consts.at("textShadow_size")),
+        std::make_pair(autotester::hash_consts.at("cmdShadow"),      autotester::hash_consts.at("cmdShadow_size")),
+        std::make_pair(autotester::hash_consts.at("pixelShadow"),    autotester::hash_consts.at("pixelShadow_size")),
+        std::make_pair(autotester::hash_consts.at("pixelShadow2"),   autotester::hash_consts.at("pixelShadow2_size")),
+        std::make_pair(autotester::hash_consts.at("cmdPixelShadow"), autotester::hash_consts.at("cmdPixelShadow_size")),
+        std::make_pair(autotester::hash_consts.at("plotSScreen"),    autotester::hash_consts.at("plotSScreen_size")),
+        std::make_pair(autotester::hash_consts.at("saveSScreen"),    autotester::hash_consts.at("saveSScreen_size")),
+        std::make_pair(autotester::hash_consts.at("cursorImage"),    autotester::hash_consts.at("cursorImage_size")),
+        std::make_pair(autotester::hash_consts.at("ram_start"),      autotester::hash_consts.at("ram_size"))
+    };
+    if (comboBoxIndex >= 1 && comboBoxIndex <= (int)(sizeof(mapIdConsts)/sizeof(mapIdConsts[0]))) {
+        char buf[10] = {0};
+        sprintf(buf, "0x%X", mapIdConsts[comboBoxIndex-1].first);
+        ui->startCRC->setText(buf);
+        sprintf(buf, "0x%X", mapIdConsts[comboBoxIndex-1].second);
+        ui->sizeCRC->setText(buf);
+        refreshCRC();
+    }
+}
+
+void MainWindow::refreshCRC() {
+    uint32_t tmp_start = 0;
+    size_t crc_size = 0;
+    uint8_t* start;
+    char *endptr1, *endptr2; // catch strtoul issues
+
+    ui->startCRC->setText(ui->startCRC->text().trimmed());
+    ui->sizeCRC->setText(ui->sizeCRC->text().trimmed());
+
+    if (ui->startCRC->text().isEmpty() || ui->sizeCRC->text().isEmpty()) {
+        goto errCRCret;
+    }
+
+    // Get GUI values
+    tmp_start = (uint32_t)strtoul(ui->startCRC->text().toStdString().c_str(), &endptr1, 0);
+    crc_size = (size_t)strtoul(ui->sizeCRC->text().toStdString().c_str(), &endptr2, 0);
+    if (*endptr1 || *endptr2) {
+        goto errCRCret;
+    }
+
+    // Get real start pointer
+    start = phys_mem_ptr(tmp_start, crc_size);
+
+    // Compute and display CRC
+    if (start != NULL) {
+        char buf[10] = {0};
+        sprintf(buf, "%X", crc32(start, crc_size));
+        ui->valueCRC->setText(buf);
+        return;
+    } else {
+        goto errCRCret;
+    }
+
+errCRCret:
+    QMessageBox::warning(this, tr("CRC Error"), tr("Error. Make sure you have entered a valid start/size pair or preset."));
+    return;
+}
+
+
+/* ================================================ */
+/* Debugger Things                                  */
+/* ================================================ */
 
 void MainWindow::setFont(int fontSize) {
     ui->textSizeSlider->setValue(fontSize);
@@ -1092,12 +1384,8 @@ void MainWindow::setFont(int fontSize) {
     ui->lcdcurrView->setFont(monospace);
 }
 
-/* ================================================ */
-/* Debugger Things                                  */
-/* ================================================ */
-
 static int hex2int(QString str) {
-    return std::stoi(str.toStdString(), nullptr, 16);
+    return (int)strtol(str.toStdString().c_str(), nullptr, 16);
 }
 
 static QString int2hex(uint32_t a, uint8_t l) {
@@ -1105,13 +1393,6 @@ static QString int2hex(uint32_t a, uint8_t l) {
 }
 
 void MainWindow::raiseDebugger() {
-    // make sure we are set on the debug window, just in case
-    if (debuggerDock) {
-        debuggerDock->setVisible(true);
-        debuggerDock->raise();
-    }
-    ui->tabWidget->setCurrentWidget(ui->tabDebugger);
-
     populateDebugWindow();
     setDebuggerState(true);
     connect(stepInShortcut, &QShortcut::activated, this, &MainWindow::stepInPressed);
@@ -1120,10 +1401,17 @@ void MainWindow::raiseDebugger() {
     connect(stepOutShortcut, &QShortcut::activated, this, &MainWindow::stepOutPressed);
 }
 
+void MainWindow::leaveDebugger() {
+    setDebuggerState(false);
+}
+
 void MainWindow::updateDebuggerChanges() {
     if (debuggerOn == true) {
         return;
     }
+
+    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
+
     /* Update all the changes in the core */
     cpu.registers.AF = static_cast<uint16_t>(hex2int(ui->afregView->text()));
     cpu.registers.HL = static_cast<uint32_t>(hex2int(ui->hlregView->text()));
@@ -1157,12 +1445,16 @@ void MainWindow::updateDebuggerChanges() {
     cpu.registers.flags._3 = ui->check3->isChecked();
 
     cpu.halted = ui->checkHalted->isChecked();
+    cpu.ADL = ui->checkADL->isChecked();
     cpu.MADL = ui->checkMADL->isChecked();
     cpu.halted = ui->checkHalted->isChecked();
     cpu.IEF1 = ui->checkIEF1->isChecked();
     cpu.IEF2 = ui->checkIEF2->isChecked();
 
-    cpu_flush(static_cast<uint32_t>(hex2int(ui->pcregView->text())), ui->checkADL->isChecked());
+    uint32_t uiPC = static_cast<uint32_t>(hex2int(ui->pcregView->text()));
+    if (cpu.registers.PC != uiPC) {
+        cpu_flush(uiPC, ui->checkADL->isChecked());
+    }
 
     backlight.brightness = static_cast<uint8_t>(ui->brightnessSlider->value());
 
@@ -1213,29 +1505,29 @@ void MainWindow::updateDebuggerChanges() {
 }
 
 void MainWindow::setDebuggerState(bool state) {
-    QPixmap pix;
-    QIcon icon;
-
     debuggerOn = state;
 
     if (debuggerOn) {
         ui->buttonRun->setText("Run");
-        pix.load(":/icons/resources/icons/run.png");
+        ui->buttonRun->setIcon(runIcon);
         debug_clear_run_until();
     } else {
         ui->buttonRun->setText("Stop");
-        pix.load(":/icons/resources/icons/stop.png");
+        ui->buttonRun->setIcon(stopIcon);
         ui->portChangeLabel->clear();
         ui->portTypeLabel->clear();
         ui->breakChangeLabel->clear();
         ui->breakTypeLabel->clear();
         ui->opView->clear();
         ui->vatView->clear();
+        ui->portChangeLabel->clear();
+        ui->portTypeLabel->clear();
+        ui->breakChangeLabel->clear();
+        ui->breakTypeLabel->clear();
+        ui->watchChangeLabel->clear();
+        ui->watchTypeLabel->clear();
     }
     setReceiveState(false);
-    icon.addPixmap(pix);
-    ui->buttonRun->setIcon(icon);
-    ui->buttonRun->setIconSize(pix.size());
 
     ui->tabDebugging->setEnabled( debuggerOn );
     ui->buttonGoto->setEnabled( debuggerOn );
@@ -1258,14 +1550,6 @@ void MainWindow::setDebuggerState(bool state) {
     ui->buttonRefreshList->setEnabled( !debuggerOn );
     ui->emuVarView->setEnabled( !debuggerOn );
     ui->buttonReceiveFiles->setEnabled( !debuggerOn && inReceivingMode);
-
-    if (!debuggerOn) {
-        updateDebuggerChanges();
-        if (inReceivingMode) {
-            inReceivingMode = false;
-            refreshVariableList();
-        }
-    }
 }
 
 void MainWindow::changeDebuggerState() {
@@ -1276,6 +1560,11 @@ void MainWindow::changeDebuggerState() {
     debuggerOn = !debuggerOn;
     if (!debuggerOn) {
         setDebuggerState(false);
+        updateDebuggerChanges();
+        if (inReceivingMode) {
+            inReceivingMode = false;
+            refreshVariableList();
+        }
     }
     emit debuggerChangedState( debuggerOn );
 }
@@ -1416,11 +1705,18 @@ void MainWindow::populateDebugWindow() {
         updatePortData(i);
     }
 
+    for(int i=0; i<ui->watchpointView->rowCount(); ++i) {
+        updateWatchpointData(i);
+    }
+
     updateTIOSView();
     updateStackView();
+    prevDisasmAddress = cpu.registers.PC;
+    updateDisasmView(prevDisasmAddress, true);
+
     ramUpdate();
     flashUpdate();
-    memUpdate(cpu.registers.PC);
+    memUpdate(prevDisasmAddress);
 }
 
 void MainWindow::updateTIOSView() {
@@ -1439,7 +1735,7 @@ void MainWindow::updateTIOSView() {
         opType.clear();
         index = 0;
         for(uint32_t j = i; j < i+11; j++) {
-            gotData[index] = debug_read_byte(j);
+            gotData[index] = mem_peek_byte(j);
             calcData += int2hex(gotData[index], 2)+" ";
             index++;
         }
@@ -1465,10 +1761,22 @@ void MainWindow::updateTIOSView() {
             calcData2 += "00 ";
         }
         formattedLine = QString("<pre><b><font color='#444'>%1</font></b>  <font color='darkblue'>%2</font>  <font color='green'>%3</font>  %4<font color='gray'>%5</font><font color='green'> %6</font></pre>")
-                                        .arg(int2hex(var.dataPtr,6), int2hex(var.vatPtr,6), int2hex(var.size,4), calcData, calcData2, calc_var_type_names[var.type]);
+                                        .arg(int2hex(var.address,6), int2hex(var.vat,6), int2hex(var.size,4), calcData, calcData2, calc_var_type_names[var.type]);
         ui->vatView->appendHtml(formattedLine);
     }
     ui->vatView->moveCursor(QTextCursor::Start);
+}
+
+void MainWindow::updateDisassembly(int tab) {
+    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
+    if (tab == 0) {
+        updateDisasmView(prevDisasmAddress, true);
+    } else {
+        ui->portView->clearSelection();
+        ui->breakpointView->clearSelection();
+        ui->watchpointView->clearSelection();
+        prevDisasmAddress = ui->disassemblyView->getSelectedAddress().toUInt(nullptr,16);
+    }
 }
 
 void MainWindow::updateDisasmView(const int sentBase, const bool newPane) {
@@ -1478,24 +1786,26 @@ void MainWindow::updateDisasmView(const int sentBase, const bool newPane) {
     disasm.adl = ui->checkADL->isChecked();
     disasm.base_address = -1;
     disasm.new_address = addressPane - ((newPane) ? 0x40 : 0);
-    if (disasm.new_address < 0) disasm.new_address = 0;
+    if (disasm.new_address < 0) { disasm.new_address = 0; }
     int32_t last_address = disasm.new_address + 0x120;
-    if (last_address > 0xFFFFFF) last_address = 0xFFFFFF;
+    if (last_address > 0xFFFFFF) { last_address = 0xFFFFFF; }
 
-    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
+    ui->disassemblyView->cursorState(false);
+    ui->disassemblyView->blockSignals(true);
     ui->disassemblyView->clear();
     ui->disassemblyView->clearAllHighlights();
-    ui->disassemblyView->cursorState(false);
-    ui->disassemblyView->verticalScrollBar()->blockSignals(false);
+
     while (disasm.new_address < last_address) {
         drawNextDisassembleLine();
     }
 
-    ui->disassemblyView->cursorState(true);
-
-    ui->disassemblyView->updateAllHighlights();
+    ui->disassemblyView->blockSignals(false);
+    ui->disassemblyView->verticalScrollBar()->blockSignals(false);
 
     ui->disassemblyView->setTextCursor(disasmOffset);
+
+    ui->disassemblyView->cursorState(true);
+    ui->disassemblyView->updateAllHighlights();
     ui->disassemblyView->centerCursor();
 }
 
@@ -1516,7 +1826,7 @@ void MainWindow::addPort() {
 
     /* Mark the port as read active */
     port = static_cast<uint16_t>(hex2int(QString::fromStdString(s)));
-    read = static_cast<uint8_t>(debug_port_read_byte(port));
+    read = static_cast<uint8_t>(port_peek_byte(port));
 
     QString portString = int2hex(port,4);
 
@@ -1606,16 +1916,28 @@ void MainWindow::changePortValues(QTableWidgetItem *item) {
 
         debug_pmonitor_set(port, value, true);
         item->setText(portString);
-        ui->portView->item(row, 1)->setText(int2hex(debug_port_read_byte(port), 2));
+        ui->portView->item(row, 1)->setText(int2hex(port_peek_byte(port), 2));
     } else if (col == 1) {
         uint8_t pdata = static_cast<uint8_t>(hex2int(item->text()));
         uint16_t port = static_cast<uint16_t>(hex2int(ui->portView->item(row, 0)->text()));
 
-        debug_port_write_byte(port, pdata);
+        port_poke_byte(port, pdata);
 
-        item->setText(int2hex(debug_port_read_byte(port), 2));
+        item->setText(int2hex(port_peek_byte(port), 2));
     }
     ui->portView->blockSignals(false);
+}
+
+void MainWindow::removePort() {
+    if (!ui->portView->rowCount() || !ui->portView->selectionModel()->isSelected(ui->portView->currentIndex())) {
+        return;
+    }
+
+    const int currentRow = ui->portView->currentRow();
+    uint16_t port = static_cast<uint16_t>(hex2int(ui->portView->item(currentRow, 0)->text()));
+
+    debug_pmonitor_remove(port);
+    ui->portView->removeRow(currentRow);
 }
 
 void MainWindow::setPreviousPortValues(QTableWidgetItem *curr_item) {
@@ -1632,6 +1954,13 @@ void MainWindow::setPreviousBreakpointAddress(QTableWidgetItem *curr_item) {
     prevBreakpointAddress = static_cast<uint32_t>(hex2int(ui->breakpointView->item(curr_item->row(), 0)->text()));
 }
 
+void MainWindow::setPreviousWatchpointAddress(QTableWidgetItem *curr_item) {
+    if (curr_item->text().isEmpty()) {
+        return;
+    }
+    prevWatchpointAddress = static_cast<uint32_t>(hex2int(ui->watchpointView->item(curr_item->row(), 0)->text()));
+}
+
 void MainWindow::changeBreakpointAddress(QTableWidgetItem *item) {
     auto row = item->row();
     auto col = item->column();
@@ -1642,16 +1971,10 @@ void MainWindow::changeBreakpointAddress(QTableWidgetItem *item) {
         address = static_cast<uint32_t>(hex2int(ui->breakpointView->item(row, 0)->text()));
         unsigned int value = DBG_NO_HANDLE;
 
-        if (col == 1) { // Break on read
-            value = DBG_READ_BREAKPOINT;
-        }
-        if (col == 2) { // Break on write
-            value = DBG_WRITE_BREAKPOINT;
-        }
-        if (col == 3) { // Break on execution
+        if (col == 1) { // Break on execution
             value = DBG_EXEC_BREAKPOINT;
         }
-        debug_breakpoint_set(address, value, item->checkState() == Qt::Checked);
+        debug_breakwatch(address, value, item->checkState() == Qt::Checked);
     } else {
         std::string s = item->text().toUpper().toStdString();
         if (s.find_first_not_of("0123456789ABCDEF") != std::string::npos || s.empty()) {
@@ -1672,51 +1995,113 @@ void MainWindow::changeBreakpointAddress(QTableWidgetItem *item) {
             }
         }
 
-        unsigned int value = ((ui->breakpointView->item(row, 1)->checkState() == Qt::Checked) ? DBG_READ_BREAKPOINT : DBG_NO_HANDLE)  |
-                             ((ui->breakpointView->item(row, 2)->checkState() == Qt::Checked) ? DBG_WRITE_BREAKPOINT : DBG_NO_HANDLE) |
-                             ((ui->breakpointView->item(row, 3)->checkState() == Qt::Checked) ? DBG_EXEC_BREAKPOINT : DBG_NO_HANDLE);
+        unsigned int value = ((ui->breakpointView->item(row, 1)->checkState() == Qt::Checked) ? DBG_EXEC_BREAKPOINT : DBG_NO_HANDLE);
 
-        debug_breakpoint_remove(prevBreakpointAddress);
+        debug_breakwatch(prevBreakpointAddress, DBG_EXEC_BREAKPOINT, false);
         item->setText(addressString);
-        debug_breakpoint_set(address, value, true);
+        debug_breakwatch(address, value, true);
         ui->breakpointView->blockSignals(false);
     }
-    updateDisasmView(address, true);
 }
 
-void MainWindow::deletePort() {
-    if (!ui->portView->rowCount() || !ui->portView->selectionModel()->isSelected(ui->portView->currentIndex())) {
-        return;
+void MainWindow::changeWatchpointAddress(QTableWidgetItem *item) {
+    auto row = item->row();
+    auto col = item->column();
+    QString newString;
+    uint32_t address;
+
+    ui->watchpointView->blockSignals(true);
+
+    if (col == 2) { // update the data located at this address
+        uint8_t i,wLength = ui->watchpointView->item(row, 1)->text().toUInt();
+        uint32_t wData;
+
+        address = static_cast<uint32_t>(ui->watchpointView->item(row, 0)->text().toUInt());
+
+        std::string s = item->text().toUpper().toStdString();
+        if (s.find_first_not_of("0123456789ABCDEF") != std::string::npos || s.empty()) {
+            item->setText(int2hex(0, wLength << 1));
+            ui->watchpointView->blockSignals(false);
+            return;
+        }
+
+        wData = static_cast<uint32_t>(item->text().toUpper().toUInt(nullptr, 16));
+        newString = int2hex(wData, wLength << 1);
+
+        item->setText(newString);
+
+        for(i=0; i<wLength; i++) {
+            mem_poke_byte(address+i, (wData >> ((i << 3))&0xFF));
+        }
+
+        ramUpdate();
+        flashUpdate();
+        memUpdate(address);
+    } else if (col == 1) { // length of data we wish to read
+        unsigned int data_length = item->text().toUInt();
+        if (data_length > 4) {
+            data_length = 4;
+        } else if (data_length < 1) {
+            data_length = 1;
+        }
+        item->setText(QString::number(data_length));
+        updateWatchpointData(row);
+    } else if (col > 2) {
+        address = static_cast<uint32_t>(hex2int(ui->watchpointView->item(row, 0)->text()));
+        unsigned int value = DBG_NO_HANDLE;
+
+        if (col == 3) { // Break on read
+            value = DBG_READ_WATCHPOINT;
+        } else
+        if (col == 4) { // Break on write
+            value = DBG_WRITE_WATCHPOINT;
+        }
+        debug_breakwatch(address, value, item->checkState() == Qt::Checked);
+    } else {
+        std::string s = item->text().toUpper().toStdString();
+        if (s.find_first_not_of("0123456789ABCDEF") != std::string::npos || s.empty()) {
+            item->setText(int2hex(prevWatchpointAddress, 6));
+            ui->watchpointView->blockSignals(false);
+            return;
+        }
+
+        address = static_cast<uint32_t>(hex2int(item->text().toUpper()));
+        newString = int2hex(address,6);
+
+        /* Return if address is already set */
+        for (int i=0; i<ui->watchpointView->rowCount(); i++) {
+            if (ui->watchpointView->item(i, 0)->text() == newString && i != row) {
+                item->setText(int2hex(prevWatchpointAddress, 6));
+                ui->watchpointView->blockSignals(false);
+                return;
+            }
+        }
+
+        unsigned int value = ((ui->watchpointView->item(row, 3)->checkState() == Qt::Checked) ? DBG_READ_WATCHPOINT : DBG_NO_HANDLE)|
+                             ((ui->watchpointView->item(row, 4)->checkState() == Qt::Checked) ? DBG_WRITE_WATCHPOINT : DBG_NO_HANDLE);
+
+        debug_breakwatch(prevWatchpointAddress, DBG_WRITE_WATCHPOINT | DBG_READ_WATCHPOINT, false);
+        item->setText(newString);
+        debug_breakwatch(address, value, true);
+        updateWatchpointData(row);
     }
-
-    const int currentRow = ui->portView->currentRow();
-    uint16_t port = static_cast<uint16_t>(hex2int(ui->portView->item(currentRow, 0)->text()));
-
-    debug_pmonitor_remove(port);
-    ui->portView->removeRow(currentRow);
+    ui->watchpointView->blockSignals(false);
 }
 
 bool MainWindow::addBreakpoint() {
-    uint32_t address;
-
     const int currentRow = ui->breakpointView->rowCount();
 
-    if (currBreakpointAddress.isEmpty()) {
-        currBreakpointAddress = "000000";
-    }
+    currAddress %= 0xFFFFFF;
+    currAddressString = int2hex(currAddress, 6).toUpper();
 
-    std::string s = currBreakpointAddress.toUpper().toStdString();
-    if (s.find_first_not_of("0123456789ABCDEF") != std::string::npos) {
+    if (currAddressString.toStdString().find_first_not_of("0123456789ABCDEF") != std::string::npos) {
         return false;
     }
 
-    address = static_cast<uint32_t>(hex2int(QString::fromStdString(s)));
-    QString addressString = int2hex(address, 6);
-
     /* Return if address is already set */
     for (int i=0; i<currentRow; ++i) {
-        if (ui->breakpointView->item(i, 0)->text() == addressString) {
-            if(addressString != "000000") {
+        if (ui->breakpointView->item(i, 0)->text() == currAddressString) {
+            if(currAddressString != "000000") {
                 ui->breakpointView->selectRow(i);
                 return false;
             }
@@ -1728,61 +2113,232 @@ bool MainWindow::addBreakpoint() {
 
     ui->breakpointView->setRowCount(currentRow + 1);
 
-    QTableWidgetItem *iaddress = new QTableWidgetItem(currBreakpointAddress);
-    QTableWidgetItem *rBreak = new QTableWidgetItem();
-    QTableWidgetItem *wBreak = new QTableWidgetItem();
+    QTableWidgetItem *iaddress = new QTableWidgetItem(currAddressString);
     QTableWidgetItem *eBreak = new QTableWidgetItem();
 
-    rBreak->setCheckState(Qt::Unchecked);
-    wBreak->setCheckState(Qt::Unchecked);
     eBreak->setCheckState(Qt::Checked);
-
-    rBreak->setFlags(rBreak->flags() & ~Qt::ItemIsEditable);
-    wBreak->setFlags(wBreak->flags() & ~Qt::ItemIsEditable);
     eBreak->setFlags(eBreak->flags() & ~Qt::ItemIsEditable);
 
     ui->breakpointView->setItem(currentRow, 0, iaddress);
-    ui->breakpointView->setItem(currentRow, 1, rBreak);
-    ui->breakpointView->setItem(currentRow, 2, wBreak);
-    ui->breakpointView->setItem(currentRow, 3, eBreak);
+    ui->breakpointView->setItem(currentRow, 1, eBreak);
 
     ui->breakpointView->selectRow(currentRow);
     ui->breakpointView->setUpdatesEnabled(true);
 
-    debug_breakpoint_set(address, DBG_EXEC_BREAKPOINT, true);
-    prevBreakpointAddress = address;
-    currBreakpointAddress.clear();
-    updateDisasmView(address, true);
+    debug_breakwatch(currAddress, DBG_EXEC_BREAKPOINT, true);
+
+    prevBreakpointAddress = currAddress;
+    currAddressString.clear();
     ui->breakpointView->blockSignals(false);
     return true;
 }
 
-void MainWindow::deleteBreakpoint() {
+bool MainWindow::removeBreakpoint() {
     if(!ui->breakpointView->rowCount() || !ui->breakpointView->selectionModel()->isSelected(ui->breakpointView->currentIndex())) {
-        return;
+        return false;
     }
 
     const int currentRow = ui->breakpointView->currentRow();
     uint32_t address = static_cast<uint32_t>(hex2int(ui->breakpointView->item(currentRow, 0)->text()));
 
-    debug_breakpoint_remove(address);
+    debug_breakwatch(address, DBG_EXEC_BREAKPOINT, false);
 
     ui->breakpointView->removeRow(currentRow);
-    updateDisasmView(address, true);
+    return true;
+}
+
+bool MainWindow::addWatchpoint() {
+    const int currentRow = ui->watchpointView->rowCount();
+
+    currAddress %= 0xFFFFFF;
+    currAddressString = int2hex(currAddress, 6).toUpper();
+
+    if (watchLength.isEmpty()) {
+        watchLength = "1";
+    }
+
+    if (watchpointType == DBG_NO_HANDLE) {
+        watchpointType = DBG_WRITE_WATCHPOINT | DBG_READ_WATCHPOINT;
+    }
+
+    if (watchpointType == DBG_EMPTY_WATCHPOINT) {
+        watchpointType = DBG_NO_HANDLE;
+    }
+
+    if (currAddressString.toStdString().find_first_not_of("0123456789ABCDEF") != std::string::npos) {
+        return false;
+    }
+
+    /* Return if address is already set */
+    for (int i=0; i<currentRow; ++i) {
+        if (ui->watchpointView->item(i, 0)->text() == currAddressString) {
+            if(currAddressString != "000000") {
+                ui->watchpointView->selectRow(i);
+                return false;
+            }
+        }
+    }
+
+    ui->watchpointView->setUpdatesEnabled(false);
+    ui->watchpointView->blockSignals(true);
+
+    QTableWidgetItem *iaddress = new QTableWidgetItem(currAddressString);
+    QTableWidgetItem *length = new QTableWidgetItem(watchLength);
+    QTableWidgetItem *dWatch = new QTableWidgetItem();
+    QTableWidgetItem *rWatch = new QTableWidgetItem();
+    QTableWidgetItem *wWatch = new QTableWidgetItem();
+
+    rWatch->setCheckState((watchpointType & DBG_READ_WATCHPOINT) ? Qt::Checked : Qt::Unchecked);
+    wWatch->setCheckState((watchpointType & DBG_WRITE_WATCHPOINT) ? Qt::Checked : Qt::Unchecked);
+
+    wWatch->setFlags(wWatch->flags() & ~Qt::ItemIsEditable);
+    rWatch->setFlags(rWatch->flags() & ~Qt::ItemIsEditable);
+
+    ui->watchpointView->setRowCount(currentRow + 1);
+
+    ui->watchpointView->setItem(currentRow, 0, iaddress);
+    ui->watchpointView->setItem(currentRow, 1, length);
+    ui->watchpointView->setItem(currentRow, 2, dWatch);
+    ui->watchpointView->setItem(currentRow, 3, rWatch);
+    ui->watchpointView->setItem(currentRow, 4, wWatch);
+
+    updateWatchpointData(currentRow);
+
+    ui->watchpointView->selectRow(currentRow);
+    ui->watchpointView->setUpdatesEnabled(true);
+
+    debug_breakwatch(currAddress, DBG_WRITE_WATCHPOINT | DBG_READ_WATCHPOINT, true);
+
+    prevWatchpointAddress = currAddress;
+
+    /* reset these for the next one */
+    currAddressString.clear();
+    watchLength.clear();
+    watchpointType = DBG_NO_HANDLE;
+
+    ui->watchpointView->blockSignals(false);
+    return true;
+}
+
+bool MainWindow::removeWatchpoint() {
+    if(!ui->watchpointView->rowCount() || !ui->watchpointView->selectionModel()->isSelected(ui->watchpointView->currentIndex())) {
+        return false;
+    }
+
+    const int currentRow = ui->watchpointView->currentRow();
+    uint32_t address = static_cast<uint32_t>(hex2int(ui->watchpointView->item(currentRow, 0)->text()));
+
+    debug_breakwatch(address, DBG_READ_WATCHPOINT | DBG_WRITE_WATCHPOINT, false);
+
+    ui->watchpointView->removeRow(currentRow);
+    return true;
+}
+
+void MainWindow::removeWatchpointAddress(QString address) {
+    for (int i=0; i<ui->watchpointView->rowCount(); i++) {
+        if (ui->watchpointView->item(i, 0)->text() == address) {
+            ui->watchpointView->setCurrentCell(i,0);
+            removeWatchpoint();
+            break;
+        }
+    }
+}
+
+void MainWindow::removeBreakpointAddress(QString address) {
+    for (int i=0; i<ui->breakpointView->rowCount(); i++) {
+        if (ui->breakpointView->item(i, 0)->text() == address) {
+            ui->breakpointView->setCurrentCell(i,0);
+            removeBreakpoint();
+            break;
+        }
+    }
 }
 
 void MainWindow::executeDebugCommand(uint32_t debugAddress, uint8_t command) {
-    (void)debugAddress; /* Uncomment me when needed */
-    switch (command) {
-        case 1:
-            consoleStr("Program Aborted.\n");
-            break;
-        case 2:
-            consoleStr("Program Entered Debugger.\n");
-            break;
-        default:
-            break;
+
+    if (debugAddress == 0xFF) {
+        uint8_t wLength;
+        int tmp;
+        switch (command) {
+            case 1: // abort() routine hit
+                consoleStr("[CEmu] Program Aborted.\n");
+                raiseDebugger();
+                return;
+            case 2: // debugger() routine hit
+                consoleStr("[CEmu] Program Entered Debugger.\n");
+                raiseDebugger();
+                return;
+            case 3: // set a breakpoint with the value in DE
+                currAddress = cpu.registers.DE;
+                addBreakpoint();
+                inDebugger = false; // continue emulation; we don't need to raise the debugger
+                return;
+            case 4: // remove a breakpoint with the value in DE
+                currAddress = cpu.registers.DE;
+                removeBreakpointAddress(int2hex(currAddress, 6));
+                inDebugger = false;
+                return;
+            case 5: // set a read watchpoint with the value in DE; length in C
+                wLength = (cpu.registers.bc.l > 4) ? 4 : cpu.registers.bc.l;
+                currAddress = cpu.registers.DE;
+                watchLength = QString::number(wLength);
+                watchpointType = DBG_READ_WATCHPOINT;
+                addWatchpoint();
+                inDebugger = false;
+                return;
+            case 6: // set a write watchpoint with the value in DE; length in C
+                wLength = (cpu.registers.bc.l > 4) ? 4 : cpu.registers.bc.l;
+                currAddress = cpu.registers.DE;
+                watchLength = QString::number(wLength);
+                watchpointType = DBG_WRITE_WATCHPOINT;
+                removeWatchpointAddress(int2hex(currAddress, 6));
+                addWatchpoint();
+                inDebugger = false;
+                return;
+            case 7: // set a read/write watchpoint with the value in DE; length in C
+                wLength = (cpu.registers.bc.l > 4) ? 4 : cpu.registers.bc.l;
+                currAddress = cpu.registers.DE;
+                watchLength = QString::number(wLength);
+                watchpointType = DBG_WRITE_WATCHPOINT | DBG_READ_WATCHPOINT;
+                removeWatchpointAddress(int2hex(currAddress, 6));
+                addWatchpoint();
+                inDebugger = false;
+                return;
+            case 8: // we need to remove a watchpoint with the value in DE
+                removeWatchpointAddress(int2hex(cpu.registers.DE, 6));
+                inDebugger = false;
+                return;
+            case 9: // we need to remove all breakpoints
+                tmp = ui->breakpointView->rowCount();
+                for (int i=0; i<tmp; i++) {
+                    ui->breakpointView->selectRow(0);
+                    removeBreakpoint();
+                }
+                inDebugger = false;
+                return;
+            case 10: // we need to remove all watchpoints
+                tmp = ui->watchpointView->rowCount();
+                for (int i=0; i<tmp; i++) {
+                    ui->watchpointView->selectRow(0);
+                    removeWatchpoint();
+                }
+                inDebugger = false;
+                return;
+            case 11: // set an empty watchpoint with the value in DE; length in C
+                wLength = (cpu.registers.bc.l > 4) ? 4 : cpu.registers.bc.l;
+                currAddress = cpu.registers.DE;
+                watchLength = QString::number(wLength);
+                watchpointType = DBG_EMPTY_WATCHPOINT;
+                removeWatchpointAddress(int2hex(currAddress, 6));
+                addWatchpoint();
+                inDebugger = false;
+                return;
+            default:
+                break;
+        }
     }
+    consoleStr("[CEmu] Unknown debug Command: 0x"+QString::number(command,16).rightJustified(2,'0')+",0x"+QString::number(debugAddress+0xFFFF00,16)+"\n");
+    inDebugger = false;
 }
 
 void MainWindow::processDebugCommand(int reason, uint32_t input) {
@@ -1794,22 +2350,32 @@ void MainWindow::processDebugCommand(int reason, uint32_t input) {
        return;
     }
 
+    raiseDebugger();
+
     // We hit a normal breakpoint; raise the correct entry in the port monitor table
-    if (reason == HIT_READ_BREAKPOINT || reason == HIT_WRITE_BREAKPOINT || reason == HIT_EXEC_BREAKPOINT) {
+    if (reason == HIT_EXEC_BREAKPOINT) {
         // find the correct entry
         while( static_cast<uint32_t>(hex2int(ui->breakpointView->item(row++, 0)->text())) != input );
         row--;
 
         ui->breakChangeLabel->setText(ui->breakpointView->item(row, 0)->text());
-        ui->breakTypeLabel->setText((reason == HIT_READ_BREAKPOINT) ? "Read" : (reason == HIT_WRITE_BREAKPOINT) ? "Write" : "Executed");
+        ui->breakTypeLabel->setText("Executed");
         ui->breakpointView->selectRow(row);
-        if (reason != HIT_EXEC_BREAKPOINT) {
-            memUpdate(input);
-        }
+    }
+
+    else if (reason == HIT_READ_BREAKPOINT || reason == HIT_WRITE_BREAKPOINT) {
+        // find the correct entry
+        while( static_cast<uint32_t>(hex2int(ui->watchpointView->item(row++, 0)->text())) != input );
+        row--;
+
+        ui->watchChangeLabel->setText(ui->watchpointView->item(row, 0)->text());
+        ui->watchTypeLabel->setText((reason == HIT_READ_BREAKPOINT) ? "Read" : "Write");
+        ui->watchpointView->selectRow(row);
+        memUpdate(input);
     }
 
     // We hit a port read or write; raise the correct entry in the port monitor table
-    if (reason == HIT_PORT_READ_BREAKPOINT || reason == HIT_PORT_WRITE_BREAKPOINT) {
+    else if (reason == HIT_PORT_READ_BREAKPOINT || reason == HIT_PORT_WRITE_BREAKPOINT) {
         while( static_cast<uint32_t>(hex2int(ui->portView->item(row++, 0)->text())) != input );
         row--;
 
@@ -1817,57 +2383,74 @@ void MainWindow::processDebugCommand(int reason, uint32_t input) {
         ui->portTypeLabel->setText((reason == HIT_PORT_READ_BREAKPOINT) ? "Read" : "Write");
         ui->portView->selectRow(row);
     }
-    updateDisasmView(cpu.registers.PC, true);
 }
 
 void MainWindow::updatePortData(int currentRow) {
     uint16_t port = static_cast<uint16_t>(hex2int(ui->portView->item(currentRow, 0)->text()));
-    uint8_t read = static_cast<uint8_t>(debug_port_read_byte(port));
+    uint8_t read = static_cast<uint8_t>(port_peek_byte(port));
 
     ui->portView->item(currentRow, 1)->setText(int2hex(read,2));
+}
+
+void MainWindow::updateWatchpointData(int currentRow) {
+    uint8_t i,length = ui->watchpointView->item(currentRow, 1)->text().toUInt();
+    uint32_t address = static_cast<uint32_t>(hex2int(ui->watchpointView->item(currentRow, 0)->text()));
+    uint32_t read = 0;
+
+    for(i=0; i<length; i++) {
+        read |= mem_peek_byte(address+i) << (i << 3);
+    }
+
+    ui->watchpointView->item(currentRow, 2)->setText(int2hex(read, length << 1));
 }
 
 void MainWindow::reloadROM() {
     if (inReceivingMode) {
         refreshVariableList();
     }
+    if(debuggerOn) {
+        changeDebuggerState();
+    }
+
+    QFile(emu.imagePath.c_str()).remove();
 
     if (emu.stop()) {
         emu.start();
-        if(debuggerOn) {
-            changeDebuggerState();
-        }
-        qDebug("Reset Successful.");
+        qDebug("Reload Successful.");
     } else {
-        qDebug("Reset Failed.");
+        qDebug("Reload Failed.");
     }
 }
 
 void MainWindow::updateStackView() {
-    ui->stackView->clear();
-
     QString formattedLine;
 
+    ui->stackView->blockSignals(true);
+    ui->stackView->clear();
+
     if (cpu.ADL) {
-        for(int i=0; i<30; i+=3) {
+        for(int i=0; i<60; i+=3) {
             formattedLine = QString("<pre><b><font color='#444'>%1</font></b> %2</pre>")
                                     .arg(int2hex(cpu.registers.SPL+i, 6),
-                                         int2hex(debug_read_long(cpu.registers.SPL+i), 6));
+                                         int2hex(mem_peek_word(cpu.registers.SPL+i, 1), 6));
             ui->stackView->appendHtml(formattedLine);
         }
     } else {
-        for(int i=0; i<20; i+=2) {
+        for(int i=0; i<40; i+=2) {
             formattedLine = QString("<pre><b><font color='#444'>%1</font></b> %2</pre>")
                                     .arg(int2hex(cpu.registers.SPS+i, 4),
-                                         int2hex(debug_read_short(cpu.registers.SPS+i), 4));
+                                         int2hex(mem_peek_word(cpu.registers.SPS+i, 0), 4));
             ui->stackView->appendHtml(formattedLine);
         }
     }
+
     ui->stackView->moveCursor(QTextCursor::Start);
+    ui->stackView->blockSignals(false);
 }
 
 void MainWindow::drawNextDisassembleLine() {
     std::string *label = 0;
+
     if (disasm.base_address != disasm.new_address) {
         disasm.base_address = disasm.new_address;
         addressMap_t::iterator item = disasm.addressMap.find(disasm.new_address);
@@ -1893,7 +2476,7 @@ void MainWindow::drawNextDisassembleLine() {
     }
 
     // Some round symbol things
-    QString breakpointSymbols = QString("<font color='#A3FFA3'><big>%1</font><font color='#A3A3FF'>%2</font><font color='#FFA3A3'>%3</big></font>")
+    QString breakpointSymbols = QString("<font color='#A3FFA3'>%1</font><font color='#A3A3FF'>%2</font><font color='#FFA3A3'>%3</font>")
                                    .arg(((disasmHighlight.hit_read_breakpoint == true)  ? "&#9679;" : " "),
                                         ((disasmHighlight.hit_write_breakpoint == true) ? "&#9679;" : " "),
                                         ((disasmHighlight.hit_exec_breakpoint == true)  ? "&#9679;" : " "));
@@ -1912,7 +2495,6 @@ void MainWindow::drawNextDisassembleLine() {
                                     QString::fromStdString(disasm.instruction.mode_suffix),
                                     instructionArgsHighlighted);
 
-    ui->disassemblyView->blockSignals(true);
     ui->disassemblyView->appendHtml(formattedLine);
 
     if (!disasmOffsetSet && disasm.new_address > addressPane) {
@@ -1927,13 +2509,13 @@ void MainWindow::drawNextDisassembleLine() {
     if (disasmHighlight.hit_pc == true) {
         ui->disassemblyView->addHighlight(QColor(Qt::red).lighter(160));
     }
-    ui->disassemblyView->blockSignals(false);
 }
 
 void MainWindow::disasmContextMenu(const QPoint& posa) {
-    QString set_pc = "Set PC to this address";
-    QString run_until = "Toggle Run Until this address";
-    QString toggle_break = "Toggle Breakpoint at this address";
+    QString set_pc = "Set PC";
+    QString toggle_break = "Toggle Breakpoint";
+    QString toggle_watch = "Toggle Watchpoint";
+    QString run_until = "Toggle Run Until";
     QString goto_mem = "Goto Memory View";
     ui->disassemblyView->setTextCursor(ui->disassemblyView->cursorForPosition(posa));
     QPoint globalPos = ui->disassemblyView->mapToGlobal(posa);
@@ -1941,6 +2523,7 @@ void MainWindow::disasmContextMenu(const QPoint& posa) {
     QMenu contextMenu;
     contextMenu.addAction(set_pc);
     contextMenu.addAction(toggle_break);
+    contextMenu.addAction(toggle_watch);
     contextMenu.addAction(run_until);
     contextMenu.addAction(goto_mem);
 
@@ -1950,12 +2533,16 @@ void MainWindow::disasmContextMenu(const QPoint& posa) {
             ui->pcregView->setText(ui->disassemblyView->getSelectedAddress());
             uint32_t address = static_cast<uint32_t>(hex2int(ui->pcregView->text()));
             debug_set_pc_address(address);
+            ui->disassemblyView->verticalScrollBar()->blockSignals(true);
             updateDisasmView(cpu.registers.PC, true);
         } else if (selectedItem->text() == toggle_break) {
             setBreakpointAddress();
+        } else if (selectedItem->text() == toggle_watch) {
+            setWatchpointAddress();
         } else if (selectedItem->text() == run_until) {
             uint32_t address = static_cast<uint32_t>(hex2int(ui->disassemblyView->getSelectedAddress()));
             debug_toggle_run_until(address);
+            ui->disassemblyView->verticalScrollBar()->blockSignals(true);
             updateDisasmView(address, true);
         } else if (selectedItem->text() == goto_mem) {
             memGoto(ui->disassemblyView->getSelectedAddress());
@@ -1963,8 +2550,57 @@ void MainWindow::disasmContextMenu(const QPoint& posa) {
     }
 }
 
+void MainWindow::variablesContextMenu(const QPoint& posa) {
+    int itemRow = ui->emuVarView->rowAt(posa.y());
+    if (itemRow == -1) {
+        return;
+    }
+
+    const calc_var_t& selected_var = vars[ui->emuVarView->item(itemRow, 0)->data(Qt::UserRole).toInt()];
+
+    QString launch_prgm = tr("Launch program"),
+            goto_mem    = tr("Goto Memory View");
+
+    QMenu contextMenu;
+    if (calc_var_is_prog(&selected_var) && !calc_var_is_internal(&selected_var)) {
+        contextMenu.addAction(launch_prgm);
+    }
+    contextMenu.addAction(goto_mem);
+
+    QAction* selectedItem = contextMenu.exec(ui->emuVarView->mapToGlobal(posa));
+    if (selectedItem) {
+        if (selectedItem->text() == launch_prgm) {
+            // Reset keypad state and resume emulation
+            keypad_reset();
+            refreshVariableList();
+
+            // Launch the program, assuming we're at the home screen...
+            autotester::sendKey(0x09); // Clear
+            if (calc_var_is_asmprog(&selected_var)) {
+                autotester::sendKey(0x9CFC); // Asm(
+            }
+            autotester::sendKey(0xDA); // prgm
+            for (const char& c : selected_var.name) {
+                if (!c) { break; }
+                autotester::sendLetterKeyPress(c); // type program name
+            }
+            autotester::sendKey(0x05); // Enter
+
+            // Restore focus to catch keypresses.
+            ui->lcdWidget->setFocus();
+        } else if (selectedItem->text() == goto_mem) {
+            refreshVariableList();
+            ui->checkLockPosition->setChecked(true); // TODO: find better than that to prevent the debugger's PC to take over
+            if (!debuggerOn) {
+                changeDebuggerState();
+            }
+            memGoto(int2hex(selected_var.address, 6));
+        }
+    }
+}
+
 void MainWindow::vatContextMenu(const QPoint& posa) {
-    QString goto_mem = "Goto Memory View";
+    QString goto_mem = tr("Goto Memory View");
     ui->vatView->setTextCursor(ui->vatView->cursorForPosition(posa));
     QPoint globalPos = ui->vatView->mapToGlobal(posa);
 
@@ -1980,7 +2616,7 @@ void MainWindow::vatContextMenu(const QPoint& posa) {
 }
 
 void MainWindow::opContextMenu(const QPoint& posa) {
-    QString goto_mem = "Goto Memory View";
+    QString goto_mem = tr("Goto Memory View");
     ui->opView->setTextCursor(ui->opView->cursorForPosition(posa));
     QPoint globalPos = ui->opView->mapToGlobal(posa);
 
@@ -1995,21 +2631,21 @@ void MainWindow::opContextMenu(const QPoint& posa) {
     }
 }
 
+void MainWindow::createLCD() {
+    LCDPopout *p = new LCDPopout();
+    p->show();
+}
+
 void MainWindow::stepInPressed() {
     if(!inDebugger) {
         return;
     }
 
     disconnect(stepInShortcut, &QShortcut::activated, this, &MainWindow::stepInPressed);
-    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
+
     debuggerOn = false;
     updateDebuggerChanges();
     emit setDebugStepInMode();
-}
-
-void MainWindow::createLCD() {
-    LCDPopout *p = new LCDPopout();
-    p->show();
 }
 
 void MainWindow::stepOverPressed() {
@@ -2017,17 +2653,11 @@ void MainWindow::stepOverPressed() {
         return;
     }
 
-    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
     disconnect(stepOverShortcut, &QShortcut::activated, this, &MainWindow::stepOverPressed);
-    disasm.base_address = cpu.registers.PC;
-    disasm.adl = cpu.ADL;
-    disassembleInstruction();
-    if (disasm.instruction.opcode == "call" || disasm.instruction.opcode == "rst") {
-        setDebuggerState(false);
-        emit setDebugStepOverMode();
-    } else {
-        stepInPressed();
-    }
+
+    debuggerOn = false;
+    updateDebuggerChanges();
+    emit setDebugStepOverMode();
 }
 
 void MainWindow::stepNextPressed() {
@@ -2035,9 +2665,10 @@ void MainWindow::stepNextPressed() {
         return;
     }
 
-    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
     disconnect(stepNextShortcut, &QShortcut::activated, this, &MainWindow::stepNextPressed);
-    setDebuggerState(false);
+
+    debuggerOn = false;
+    updateDebuggerChanges();
     emit setDebugStepNextMode();
 }
 
@@ -2046,17 +2677,78 @@ void MainWindow::stepOutPressed() {
         return;
     }
 
-    ui->disassemblyView->verticalScrollBar()->blockSignals(true);
     disconnect(stepOutShortcut, &QShortcut::activated, this, &MainWindow::stepOutPressed);
-    setDebuggerState(false);
+
+    debuggerOn = false;
+    updateDebuggerChanges();
     emit setDebugStepOutMode();
 }
 
-void MainWindow::setBreakpointAddress() {
-    currBreakpointAddress = ui->disassemblyView->getSelectedAddress();
+void MainWindow::disableDebugger() {
+    setDebuggerState(false);
+}
 
-    if(!addBreakpoint()) {
-        deleteBreakpoint();
+void MainWindow::setBreakpointAddress() {
+    currAddress = static_cast<uint32_t>(hex2int(ui->disassemblyView->getSelectedAddress()));
+
+    QTextCursor c = ui->disassemblyView->textCursor();
+    c.setCharFormat(ui->disassemblyView->currentCharFormat());
+
+    if (!addBreakpoint()) {
+        removeBreakpoint();
+    }
+
+    disasm.base_address = currAddress;
+    disasmHighlight.hit_exec_breakpoint = false;
+    disassembleInstruction();
+
+    c.movePosition(QTextCursor::StartOfLine, QTextCursor::MoveAnchor);
+    c.setPosition(c.position()+9, QTextCursor::MoveAnchor);
+    c.deleteChar();
+
+    // Add the red dot
+    if (disasmHighlight.hit_exec_breakpoint) {
+        c.insertHtml("<font color='#FFA3A3'>&#9679;</font>");
+    } else {
+        c.insertText(" ");
+    }
+}
+
+void MainWindow::setWatchpointAddress() {
+    currAddress = static_cast<uint32_t>(hex2int(ui->disassemblyView->getSelectedAddress()));
+
+    QTextCursor c = ui->disassemblyView->textCursor();
+    c.setCharFormat(ui->disassemblyView->currentCharFormat());
+
+    if (!addWatchpoint()) {
+        removeWatchpoint();
+    }
+
+    disasm.base_address = currAddress;
+    disasmHighlight.hit_read_breakpoint = false;
+    disasmHighlight.hit_write_breakpoint = false;
+    disassembleInstruction();
+
+    c.movePosition(QTextCursor::StartOfLine, QTextCursor::MoveAnchor);
+    c.setPosition(c.position()+7, QTextCursor::MoveAnchor);
+    c.deleteChar();
+
+    // Add the green dot
+    if (disasmHighlight.hit_read_breakpoint) {
+        c.insertHtml("<font color='#A3FFA3'>&#9679;</font>");
+    } else {
+        c.insertText(" ");
+    }
+
+    c.movePosition(QTextCursor::StartOfLine, QTextCursor::MoveAnchor);
+    c.setPosition(c.position()+8, QTextCursor::MoveAnchor);
+    c.deleteChar();
+
+    // Add the blue dot
+    if (disasmHighlight.hit_write_breakpoint) {
+        c.insertHtml("<font color='#A3A3FF'>&#9679;</font>");
+    } else {
+        c.insertText(" ");
     }
 }
 
@@ -2134,7 +2826,7 @@ void MainWindow::memUpdate(uint32_t addressBegin) {
     memSize = end-start;
 
     for (int32_t i=start; i<end; i++) {
-        mem_data.append(debug_read_byte(i));
+        mem_data.append(mem_peek_byte(i));
     }
 
     ui->memEdit->setData(mem_data);
@@ -2252,7 +2944,7 @@ void MainWindow::memGoto(QString address) {
     memSize = end-start;
 
     for (int i=start; i<end; i++) {
-        mem_data.append(debug_read_byte(i));
+        mem_data.append(mem_peek_byte(i));
     }
 
     ui->memEdit->setData(mem_data);
@@ -2295,7 +2987,7 @@ void MainWindow::memSyncPressed() {
     qint64 posa = ui->memEdit->cursorPosition();
 
     for (int i = 0; i<memSize; i++) {
-        debug_write_byte(i+start, ui->memEdit->dataAt(i, 1).at(0));
+        mem_poke_byte(i+start, ui->memEdit->dataAt(i, 1).at(0));
     }
 
     syncHexView(posa, ui->memEdit);
@@ -2383,15 +3075,11 @@ void MainWindow::addEquateFile(QString fileName) {
 }
 
 void MainWindow::scrollDisasmView(int value) {
-    if (value >= ui->disassemblyView->verticalScrollBar()->value()) {
-        if (value >= ui->disassemblyView->verticalScrollBar()->maximum()) {
-            ui->disassemblyView->verticalScrollBar()->blockSignals(true);
-            disconnect(ui->disassemblyView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scrollDisasmView);
-            drawNextDisassembleLine();
-            ui->disassemblyView->verticalScrollBar()->setValue(ui->disassemblyView->verticalScrollBar()->maximum()-1);
-            connect(ui->disassemblyView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scrollDisasmView);
-            ui->disassemblyView->verticalScrollBar()->blockSignals(false);
-        }
+    if (value >= ui->disassemblyView->verticalScrollBar()->maximum() && value > 0x100) {
+        ui->disassemblyView->verticalScrollBar()->blockSignals(true);
+        drawNextDisassembleLine();
+        ui->disassemblyView->verticalScrollBar()->setValue(ui->disassemblyView->verticalScrollBar()->maximum()-1);
+        ui->disassemblyView->verticalScrollBar()->blockSignals(false);
     }
 }
 

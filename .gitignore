@@ -51,3 +51,7 @@ Thumbs.db
 *.rom
 *.data
 *.bc
+*.js.mem
+
+# IntelliJ IDEs things
+**/.idea/

@@ -1,9 +1,4 @@
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#else
-#define EMSCRIPTEN_KEEPALIVE
-#endif
-
+#include "defines.h"
 #include "keypad.h"
 #include "emu.h"
 #include "schedule.h"
@@ -22,7 +17,7 @@ void EMSCRIPTEN_KEEPALIVE keypad_key_event(unsigned int row, unsigned int col, b
     if (row == 2 && col == 0) {
         intrpt_set(INT_ON, press);
         if (press && calc_is_off()) {
-            asic.ship_mode_enabled = false;
+            asic.shipModeEnabled = false;
             control.readBatteryStatus = ~1;
             intrpt_pulse(19);
         }
@@ -176,7 +171,7 @@ void keypad_reset() {
 
     keypad.current_row = 0;
     for(i=0; i<sizeof(keypad.data) / sizeof(keypad.data[0]); i++) {
-        keypad.data[i] = 0;
+        keypad.data[i] = keypad.key_map[i] = 0;
     }
 
     sched.items[SCHED_KEYPAD].clock = CLOCK_APB;

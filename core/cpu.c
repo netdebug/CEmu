@@ -19,6 +19,8 @@
 
 #include <string.h>
 
+#include <stdio.h>
+
 #include "cpu.h"
 #include "emu.h"
 #include "mem.h"
@@ -60,8 +62,14 @@ static void cpu_prefetch(uint32_t address, bool mode) {
 static uint8_t cpu_fetch_byte(void) {
     uint8_t value;
 #ifdef DEBUG_SUPPORT
-    if (debugger.data.block[cpu.registers.PC] & (DBG_EXEC_BREAKPOINT | DBG_STEP_OVER_BREAKPOINT | DBG_RUN_UNTIL_BREAKPOINT)) {
-        open_debugger((debugger.data.block[cpu.registers.PC] & DBG_EXEC_BREAKPOINT) ? HIT_EXEC_BREAKPOINT : DBG_STEP, cpu.registers.PC);
+    if ((debugger.data.block[cpu.registers.PC] & (DBG_EXEC_BREAKPOINT | DBG_RUN_UNTIL_BREAKPOINT))
+            || ((debugger.data.block[cpu.registers.PC] & DBG_STEP_OVER_BREAKPOINT)
+                && ((cpu.ADL ? cpu.registers.SPL >= debugger.stepOutSPL : cpu.registers.SPS >= debugger.stepOutSPS) || (cpuEvents & EVENT_DEBUG_STEP_OVER)))) {
+        if ((debugger.data.block[cpu.registers.PC] & DBG_STEP_OVER_BREAKPOINT)) {
+            debug_clear_step_over();
+        }
+        open_debugger((debugger.data.block[cpu.registers.PC] & DBG_EXEC_BREAKPOINT) ? HIT_EXEC_BREAKPOINT : DBG_STEP,
+                      cpu.registers.PC);
     }
 #endif
     value = cpu.prefetch;
@@ -91,10 +99,27 @@ static uint32_t cpu_fetch_word_no_prefetch(void) {
 }
 
 static uint8_t cpu_read_byte(uint32_t address) {
-    return mem_read_byte(cpu_address_mode(address, cpu.L));
+    uint32_t cpuAddress = cpu_address_mode(address, cpu.L);
+#ifdef DEBUG_SUPPORT
+    if (cpuEvents & (EVENT_DEBUG_STEP_OVER | EVENT_DEBUG_STEP_NEXT)) {
+        uint32_t stepOverDist = cpu_mask_mode(cpuAddress - debugger.stepOverInstrEnd, debugger.stepOverMode);
+        if ((stepOverDist <= debugger.stepOverExtendSize) && (debugger.stepOverMode
+                || ((cpuAddress & 0xFF0000) == (debugger.stepOverInstrEnd & 0xFF0000)))) {
+            uint32_t stepOverAddress = cpu_mask_mode(cpuAddress + 1, debugger.stepOverMode);
+            debugger.data.block[stepOverAddress] |= DBG_STEP_OVER_BREAKPOINT;
+            //fprintf(stderr, "[cpu_read_byte] Added breakpoint at 0x%08x\n", stepOverAddress);
+            if (stepOverDist == debugger.stepOverExtendSize) {
+                debugger.stepOverExtendSize++;
+                //fprintf(stderr, "[cpu_read_byte] stepOverExtendSize=%i\n", debugger.stepOverExtendSize);
+            }
+        }
+    }
+#endif
+    return mem_read_byte(cpuAddress);
 }
 static void cpu_write_byte(uint32_t address, uint8_t value) {
-    mem_write_byte(cpu_address_mode(address, cpu.L), value);
+    uint32_t cpuAddress = cpu_address_mode(address, cpu.L);
+    mem_write_byte(cpuAddress, value);
 }
 
 static uint32_t cpu_read_word(uint32_t address) {
@@ -373,6 +398,29 @@ static uint32_t cpu_dec_bc_partial_mode() {
 
 static void cpu_call(uint32_t address, bool mixed) {
     eZ80registers_t *r = &cpu.registers;
+#ifdef DEBUG_SUPPORT
+    if (cpuEvents & EVENT_DEBUG_STEP_OUT) {
+        debugger.stepOverCall = true;
+        bool addWait = false;
+        if (cpu.ADL) {
+            if (r->SPL >= debugger.stepOutSPL) {
+                addWait = true;
+                debugger.stepOutSPL = r->SPL;
+                //fprintf(stderr, "[cpu_call] stepOutSPL=0x%08x\n", debugger.stepOutSPL);
+            }
+        } else {
+            if (r->SPS >= debugger.stepOutSPS) {
+                addWait = true;
+                debugger.stepOutSPS = r->SPS;
+                //fprintf(stderr, "[cpu_call] stepOutSPS=0x%08x\n", debugger.stepOutSPS);
+            }
+        }
+        if (addWait && (debugger.stepOutWait < 1)) {
+            debugger.stepOutWait++;
+            //fprintf(stderr, "[cpu_call] debugger.stepOutWait=%i\n", debugger.stepOutWait);
+        }
+    }
+#endif
     if (mixed) {
         bool stack = cpu.IL || (cpu.L && !cpu.ADL);
         if (cpu.ADL) {
@@ -402,10 +450,18 @@ static void cpu_trap(void) {
 
 static void cpu_check_step_out(void) {
 #ifdef DEBUG_SUPPORT
-    if (cpuEvents & EVENT_DEBUG_STEP_OUT
-            && (cpu.ADL ? cpu.registers.SPL >= debugger.stepOutSPL : cpu.registers.SPS >= debugger.stepOutSPS)) {
-        cpuEvents &= ~EVENT_DEBUG_STEP_OUT;
-        open_debugger(DBG_STEP, 0);
+    if (cpuEvents & EVENT_DEBUG_STEP_OUT) {
+        int32_t spDelta = cpu.ADL ? (int32_t) cpu.registers.SPL - (int32_t) debugger.stepOutSPL :
+                          (int32_t) cpu.registers.SPS - (int32_t) debugger.stepOutSPS;
+        if (spDelta >= 0) {
+            //fprintf(stderr, "[cpu_check_step_out] debugger.stepOutWait=%i\n", debugger.stepOutWait - 1);
+            if (!debugger.stepOutWait--) {
+                debug_clear_step_over();
+                cpu_clear_mode();
+                cpuEvents &= ~(EVENT_DEBUG_STEP | EVENT_DEBUG_STEP_OUT);
+                open_debugger(DBG_STEP, 0);
+            }
+        }
     }
 #endif
 }
@@ -736,6 +792,13 @@ static void cpu_execute_bli() {
         cpu.cycles += internalCycles;
     } while (repeat && (cpu.cycles < cpu.next));
     cpu.inBlock = repeat;
+
+#ifdef DEBUG_SUPPORT
+    if (cpuEvents & EVENT_DEBUG_STEP_OVER) {
+        cpuEvents &= ~EVENT_DEBUG_STEP;
+    }
+#endif
+
 }
 
 void cpu_init(void) {
@@ -782,9 +845,17 @@ void cpu_execute(void) {
     while (!exiting) {
     cpu_execute_continue:
         if (cpu.IEF_wait) {
-            cpu.IEF_wait = 0;
-            cpu.IEF1 = cpu.IEF2 = 1;
-            cpu.next = save_next;
+            if (cpu.IEF_wait > 1) {
+                if (cpu.cycles < cpu.next) {
+                    cpu.IEF_wait = 1;
+                    save_next = cpu.next;
+                    cpu.next = cpu.cycles + 1; // execute one more instruction
+                }
+            } else {
+                cpu.IEF_wait = 0;
+                cpu.IEF1 = cpu.IEF2 = 1;
+                cpu.next = save_next;
+            }
         }
         if (cpu.NMI || (cpu.IEF1 && (intrpt.request->status & intrpt.request->enabled))) {
             cpu_clear_mode();
@@ -1057,27 +1128,31 @@ void cpu_execute(void) {
                                     w = cpu_index_address();
                                     context.opcode = cpu_fetch_byte();
                                     r->R += ~cpu.PREFIX & 2;
-                                    old = cpu_read_reg_prefetched(context.z, w);
-                                    switch (context.x) {
-                                        case 0: // rot[y] r[z]
-                                            cpu_execute_rot(context.y, context.z, w, old);
-                                            break;
-                                        case 1: // BIT y, r[z]
-                                            old &= (1 << context.y);
-                                            r->F = cpuflag_sign_b(old) | cpuflag_zero(old) | cpuflag_undef(r->F)
-                                               | cpuflag_parity(old) | cpuflag_c(r->flags.C)
-                                               | FLAG_H;
-                                            break;
-                                        case 2: // RES y, r[z]
-                                            cpu.cycles += context.z == 6;
-                                            old &= ~(1 << context.y);
-                                            cpu_write_reg_prefetched(context.z, w, old);
-                                            break;
-                                        case 3: // SET y, r[z]
-                                            cpu.cycles += context.z == 6;
-                                            old |= 1 << context.y;
-                                            cpu_write_reg_prefetched(context.z, w, old);
-                                            break;
+                                    if (cpu.PREFIX && context.z != 6) { // OPCODETRAP
+                                        cpu_trap_rewind(2);
+                                    } else {
+                                        old = cpu_read_reg_prefetched(context.z, w);
+                                        switch (context.x) {
+                                            case 0: // rot[y] r[z]
+                                                cpu_execute_rot(context.y, context.z, w, old);
+                                                break;
+                                            case 1: // BIT y, r[z]
+                                                old &= (1 << context.y);
+                                                r->F = cpuflag_sign_b(old) | cpuflag_zero(old) | cpuflag_undef(r->F)
+                                                    | cpuflag_parity(old) | cpuflag_c(r->flags.C)
+                                                    | FLAG_H;
+                                                break;
+                                            case 2: // RES y, r[z]
+                                                cpu.cycles += context.z == 6;
+                                                old &= ~(1 << context.y);
+                                                cpu_write_reg_prefetched(context.z, w, old);
+                                                break;
+                                            case 3: // SET y, r[z]
+                                                cpu.cycles += context.z == 6;
+                                                old |= 1 << context.y;
+                                                cpu_write_reg_prefetched(context.z, w, old);
+                                                break;
+                                        }
                                     }
                                     break;
                                 case 2: // OUT (n), A
@@ -1102,21 +1177,22 @@ void cpu_execute(void) {
                                     cpu.IEF_wait = cpu.IEF1 = cpu.IEF2 = 0;
                                     break;
                                 case 7: // EI
-                                    cpu.IEF_wait = 1;
-                                    save_next = cpu.next;
-                                    cpu.next = cpu.cycles + 1; // execute one more instruction
-#ifdef DEBUG_SUPPORT
-                                    if (cpuEvents & EVENT_DEBUG_STEP) {
-                                        cpuEvents &= ~EVENT_DEBUG_STEP;
-                                        open_debugger(DBG_STEP, 0);
+                                    if (cpu.cycles < cpu.next) {
+                                        cpu.IEF_wait = 1;
+                                        save_next = cpu.next;
+                                        cpu.next = cpu.cycles + 1; // execute one more instruction
+                                    } else {
+                                        cpu.IEF_wait = 2;
                                     }
-#endif
                                     break;
                             }
                             break;
                         case 4: // CALL cc[y], nn
                             if (cpu_read_cc(context.y)) {
                                 cpu_call(cpu_fetch_word_no_prefetch(), cpu.SUFFIX);
+#ifdef DEBUG_SUPPORT
+                                debug_switch_step_mode();
+#endif
                             } else {
                                 cpu_fetch_word();
                             }
@@ -1130,6 +1206,9 @@ void cpu_execute(void) {
                                     switch (context.p) {
                                         case 0: // CALL nn
                                             cpu_call(cpu_fetch_word_no_prefetch(), cpu.SUFFIX);
+#ifdef DEBUG_SUPPORT
+                                            debug_switch_step_mode();
+#endif
                                             break;
                                         case 1: // 0xDD prefixed opcodes
                                             cpu.PREFIX = 2;
@@ -1141,15 +1220,14 @@ void cpu_execute(void) {
                                             switch (context.x) {
                                                 case 0:
                                                     switch (context.z) {
-                                                        case 0:
-                                                            if (context.y == 6) { // OPCODETRAP
-                                                                cpu_trap();
-                                                            } else { // IN0 r[y], (n)
-                                                                cpu_write_reg(context.y, new = cpu_read_in(cpu_fetch_byte()));
-                                                                r->F = cpuflag_sign_b(new) | cpuflag_zero(new)
-                                                                    | cpuflag_undef(r->F) | cpuflag_parity(new)
-                                                                    | cpuflag_c(r->flags.C);
+                                                        case 0: // IN0 r[y], (n)
+                                                            new = cpu_read_in(cpu_fetch_byte());
+                                                            if (context.y != 6) {
+                                                                cpu_write_reg(context.y, new);
                                                             }
+                                                            r->F = cpuflag_sign_b(new) | cpuflag_zero(new)
+                                                                | cpuflag_undef(r->F) | cpuflag_parity(new)
+                                                                | cpuflag_c(r->flags.C);
                                                             break;
                                                          case 1:
                                                             if (context.y == 6) { // LD IY, (HL)
@@ -1193,15 +1271,14 @@ void cpu_execute(void) {
                                                     break;
                                                 case 1:
                                                     switch (context.z) {
-                                                        case 0:
-                                                            if (context.y == 6) { // OPCODETRAP (ADL)
-                                                                cpu_trap();
-                                                            } else { // IN r[y], (BC)
-                                                                cpu_write_reg(context.y, new = cpu_read_in(r->BC));
-                                                                r->F = cpuflag_sign_b(new) | cpuflag_zero(new)
-                                                                    | cpuflag_undef(r->F) | cpuflag_parity(new)
-                                                                    | cpuflag_c(r->flags.C);
+                                                        case 0: // IN r[y], (BC)
+                                                            new = cpu_read_in(r->BC);
+                                                            if (context.y != 6) {
+                                                                cpu_write_reg(context.y, new);
                                                             }
+                                                            r->F = cpuflag_sign_b(new) | cpuflag_zero(new)
+                                                                | cpuflag_undef(r->F) | cpuflag_parity(new)
+                                                                | cpuflag_c(r->flags.C);
                                                             break;
                                                         case 1:
                                                             if (context.y == 6) { // OPCODETRAP (ADL)
@@ -1396,9 +1473,6 @@ void cpu_execute(void) {
                                                             break;
                                                         case 0xD7: // LD HL, I
                                                             r->HL = cpu_mask_mode(r->I | (r->MBASE << 16), cpu.L);
-                                                            break;
-                                                        case 0xEE: // flash erase
-                                                            memset(mem.flash.block + (r->HL & ~0x3FFF), 0xFF, 0x4000);
                                                             break;
                                                         default:   // OPCODETRAP
                                                             cpu_trap();

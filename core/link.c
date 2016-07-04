@@ -7,7 +7,7 @@
 #include "os/os.h"
 
 volatile bool emu_is_sending = false;
-volatile bool emu_is_recieving = false;
+volatile bool emu_is_receiving = false;
 
 /* static const int ram_start = 0xD00000; */
 static const int safe_ram_loc = 0xD052C6;
@@ -52,7 +52,7 @@ void enterVariableLink(void) {
     gui_entered_send_state(true);
     do {
         gui_emu_sleep();
-    } while(emu_is_sending || emu_is_recieving);
+    } while(emu_is_sending || emu_is_receiving);
 }
 
 bool listVariablesLink(void) {
@@ -68,18 +68,15 @@ bool listVariablesLink(void) {
     return true;
 }
 
-static uint32_t get_ptr(uint32_t address) {
-    return *phys_mem_ptr(address, 1)
-         | *phys_mem_ptr(address + 1, 1) << 8
-         | *phys_mem_ptr(address + 2, 1) << 16;
-}
-
 /*
  * Really hackish way to send a variable -- Like, on a scale of 1 to hackish, it's like really hackish
  * Proper USB emulation should really be a thing at some point :P
  * See GitHub issue #25
  */
-bool sendVariableLink(const char *var_name) {
+bool EMSCRIPTEN_KEEPALIVE sendVariableLink(const char *var_name) {
+    const size_t h_size = sizeof(header_data);
+    const size_t op_size = 9;
+
     FILE *file;
     uint8_t tmp_buf[0x80];
 
@@ -91,15 +88,12 @@ bool sendVariableLink(const char *var_name) {
             var_type,
             var_arc;
 
-    uint8_t *run_asm_safe = phys_mem_ptr(safe_ram_loc, 1),
+    uint8_t *run_asm_safe = phys_mem_ptr(safe_ram_loc, 8400),
             *cxCurApp     = phys_mem_ptr(0xD007E0, 1),
-            *op1          = phys_mem_ptr(0xD005F8, 1),
+            *op1          = phys_mem_ptr(0xD005F8, op_size),
             *var_ptr;
 
     uint16_t var_size;
-
-    const size_t h_size = sizeof(header_data);
-    const size_t op_size = 9;
 
     /* Return if we are at an error menu */
     if(*cxCurApp == 0x52) {
@@ -132,7 +126,7 @@ bool sendVariableLink(const char *var_name) {
         control.readBatteryStatus = ~1;
         intrpt_pulse(19);
         cpu.cycles = cpu.IEF_wait = 0;
-        cpu.next = 5000000;
+        cpu.next = 5300000;
         cpu_execute();
         intrpt_set(INT_ON, false);
         goto r_err;
@@ -142,7 +136,7 @@ bool sendVariableLink(const char *var_name) {
     memcpy(run_asm_safe, jforcegraph, sizeof(jforcegraph));
     cpu_flush(safe_ram_loc, 1);
     cpu.cycles = 0;
-    cpu.next = 2000000;
+    cpu.next = 2300000;
     cpu_execute();
 
     if (fseek(file, 0x3B, 0))                            goto r_err;
@@ -158,7 +152,7 @@ bool sendVariableLink(const char *var_name) {
     memcpy(&run_asm_safe[6], pgrm_loader, sizeof(pgrm_loader));
     cpu_flush(safe_ram_loc, 1);
     cpu.cycles = 0;
-    cpu.next = 20000000;
+    cpu.next = 23000000;
     cpu_execute();
 
     if(mem_read_byte(0xD008DF)) {
@@ -166,9 +160,8 @@ bool sendVariableLink(const char *var_name) {
         goto r_err;
     }
 
-    var_ptr = phys_mem_ptr(get_ptr(safe_ram_loc), 1);
-
     var_size = ((uint16_t)var_size_high << 8u) | (uint16_t)var_size_low;
+    var_ptr = phys_mem_ptr(mem_peek_long(safe_ram_loc), var_size);
 
     if (fseek(file, 0x48, 0))                           goto r_err;
     if (fread(var_ptr, 1, var_size, file) != var_size)  goto r_err;
@@ -178,7 +171,7 @@ bool sendVariableLink(const char *var_name) {
         memcpy(run_asm_safe, archivevar, sizeof(archivevar));
         cpu_flush(safe_ram_loc, 1);
         cpu.cycles = 0;
-        cpu.next = 20000000;
+        cpu.next = 23000000;
         cpu_execute();
     }
 
@@ -186,7 +179,7 @@ bool sendVariableLink(const char *var_name) {
     memcpy(run_asm_safe, jforcehome, sizeof(jforcehome));
     cpu_flush(safe_ram_loc, 1);
     cpu.cycles = 0;
-    cpu.next = 2000000;
+    cpu.next = 2300000;
     cpu_execute();
 
     cpu.cycles = save_cycles;

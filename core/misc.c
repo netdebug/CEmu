@@ -6,6 +6,7 @@
 #include "emu.h"
 #include "defines.h"
 #include "interrupt.h"
+#include "debug/debug.h"
 
 watchdog_state_t watchdog;
 protected_state_t protect;
@@ -32,7 +33,7 @@ static void watchdog_event(int index) {
 
 /* Watchdog read routine */
 static uint8_t watchdog_read(const uint16_t pio) {
-    uint8_t index = pio & 0xFF;
+    uint8_t index = pio;
     uint8_t bit_offset = (index & 3) << 3;
     uint8_t value = 0;
 
@@ -54,7 +55,7 @@ static uint8_t watchdog_read(const uint16_t pio) {
             value = read8(watchdog.status, bit_offset);
             break;
         case 0x018:
-            value = read8(watchdog.intrpt_length, bit_offset);
+            value = read8(watchdog.intrptLength, bit_offset);
             break;
         case 0x01C: case 0x01D: case 0x01E: case 0x01F:
             value = read8(watchdog.revision, bit_offset);
@@ -69,7 +70,7 @@ static uint8_t watchdog_read(const uint16_t pio) {
 
 /* Watchdog write routine */
 static void watchdog_write(const uint16_t pio, const uint8_t byte) {
-    uint8_t index = pio & 0xFF;
+    uint8_t index = pio;
     uint8_t bit_offset = (index & 3) << 3;
 
     switch (index) {
@@ -153,7 +154,7 @@ static uint8_t protected_read(const uint16_t pio) {
 
     switch (pio) {
         case 0xB00:
-            value = protect.led_state;
+            value = protect.ledState;
             break;
         default:
             value = protect.unknown_ports[pio & 0xFF];
@@ -167,10 +168,10 @@ static void protected_write(const uint16_t pio, const uint8_t byte) {
 
     switch (pio) {
         case 0xB00:
-            protect.led_state = byte;
+            protect.ledState = byte;
             break;
         default:
-            protect.unknown_ports[pio & 0xFF] = byte;
+            protect.unknown_ports[pio] = byte;
             break;
     }
 
@@ -201,12 +202,12 @@ bool protect_restore(const emu_image *s) {
 
 /* Read from the 0xCXXX range of ports */
 static uint8_t cxxx_read(const uint16_t pio) {
-    return cxxx.ports[pio & 0xFF];
+    return cxxx.ports[pio];
 }
 
 /* Write to the 0xCXXX range of ports */
 static void cxxx_write(const uint16_t pio, const uint8_t byte) {
-    cxxx.ports[pio & 0xFF] = byte;
+    cxxx.ports[pio] = byte;
 }
 
 static const eZ80portrange_t pcxxx = {
@@ -313,22 +314,17 @@ bool exxx_restore(const emu_image *s) {
 /* Write to the 0xFXXX range of ports */
 static void fxxx_write(const uint16_t pio, const uint8_t value) {
     /* 0xFFE appears to dump the contents of flash. Probably not a good thing to print to a console :) */
-
     if (pio != 0xFFF) {
         return;
     }
 
 #ifdef DEBUG_SUPPORT
-    debugger.buffer[debugger.currentBuffPos] = (char)value;
-    debugger.currentBuffPos = (debugger.currentBuffPos + 1) % (SIZEOF_DBG_BUFFER);
-    if (value == 0) {
-        unsigned x;
-        debugger.currentBuffPos = 0;
-        gui_console_printf("%s",debugger.buffer);
-        for(x=0; x<6; x++) {
-            gui_emu_sleep();
-        }
+    if (value != 0) {
+        debugger.buffer[debugger.currentBuffPos] = (char)value;
+        debugger.currentBuffPos = (debugger.currentBuffPos + 1) % (SIZEOF_DBG_BUFFER);
     }
+#else
+    (void)value; /* Uncomment me when needed */
 #endif
 }
 
