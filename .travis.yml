@@ -13,7 +13,7 @@ addons:
       name: CE-Programming/CEmu
       description: Build submitted via Travis CI
     build_command_prepend: cov-configure --gcc; qmake gui/qt
-    build_command: make -j4 CC=gcc-6 CXX=g++-6 LINK=g++-6
+    build_command: make -j4
     branch_pattern: coverity_scan
     notification_email:
       secure: YYowtQanGhvtRryWFG9UqyOkEmecN0L61hjhWMJEhhtNH7bBkFj2rTdShn+yTa9pFTBXoN1+MjxFrHzEr2VwUBGP+Ku4uEFK+fbrZF+rXkZiTqAmKrO26udpfD8IPM2yE3DkvCTjmMPB+khPr0ZVbJuhpKCeB82JLiEuujIjVgRBxrs3L3ktv2VHUpVM9mUUaEIWHQ9MiBLcvRjuUpxXPdnHZxMsFx3wWkkKmaU5jMsJTdc5Sf9qshY7gIsM6rXjVQl2N20dlZzMOzsqd+Gi4n9SHp6lPTrB9e2/BBDu9BSYKnSxfCg9Bx/2YQQqolHruBqIi86MzX6S1IkIeATfBtuAojkh8MHADSTLvBY7cn9MBOcH8ERtNjeRPyiCk8VmNrZj5y/bCIyJCoqkQuSWOOf76gwjNXe2CdaKzO7rfnP1amF21GwyQta6wZhWeilB7xuPRIAab8yOtptW1EVmGHpjdGNTGv99/XYsadaYW1WL6NzsE1qcl5tVCzzRBqVzu9Q/0YY+F8F0HJUVubN/5CZwQSxH3Q1ss8TBGn+4FqYRfOvGFZMGhkF9Aq8yeP0erJF8S2PvNU2gyJf1zqoluS/tYc8VhfyAEFKj5+vB7SUqXLgqFrguruLiv6icLAcWLxfN3/vfQAgQ1bqwLdQT4g7BVMc+iImvlnOc2CkwhPQ=
@@ -24,7 +24,8 @@ before_install:
 - sudo apt-get update -qq
 
 install:
-- sudo apt-get install -y --force-yes --allow-unauthenticated -qq g++-6 gcc-6; export CXX="g++-6" CC="gcc-6"; which $CXX; ls -lh `which $CXX`; $CXX --version; which g++; ls -lh `which g++`; g++ --version
+- sudo apt-get install -y --force-yes --allow-unauthenticated -qq g++-6 gcc-6; export CXX="g++-6" CC="gcc-6"; which $CXX; ls -lh `which $CXX`; $CXX --version
+- which g++; ls -lh `which g++`; g++ --version; sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-6 50; sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-6 50; which g++; ls -lh `which g++`; g++ --version
 - sudo apt-get install -y --force-yes --allow-unauthenticated -qq qt55base qt55declarative; source /opt/qt55/bin/qt55-env.sh
 
 script:
