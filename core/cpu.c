@@ -53,8 +53,10 @@ static uint32_t cpu_address_mode(uint32_t address, bool mode) {
 
 static void cpu_prefetch(uint32_t address, bool mode) {
     cpu.ADL = mode;
+    // rawPC the PC after the next prefetch (which we do late), before adding MBASE.
+    cpu.registers.rawPC = cpu_mask_mode(address + 1, mode);
     cpu.registers.PC = cpu_address_mode(address, mode);
-    cpu.prefetch = mem_read_byte(cpu.registers.PC);
+    cpu.prefetch = mem_read_cpu(cpu.registers.PC, true);
 #ifdef DEBUG_SUPPORT
     debugger.data.block[cpu.registers.PC] |= DBG_INST_MARKER;
 #endif
@@ -115,11 +117,11 @@ static uint8_t cpu_read_byte(uint32_t address) {
         }
     }
 #endif
-    return mem_read_byte(cpuAddress);
+    return mem_read_cpu(cpuAddress, false);
 }
 static void cpu_write_byte(uint32_t address, uint8_t value) {
     uint32_t cpuAddress = cpu_address_mode(address, cpu.L);
-    mem_write_byte(cpuAddress, value);
+    mem_write_cpu(cpuAddress, value);
 }
 
 static uint32_t cpu_read_word(uint32_t address) {
@@ -139,13 +141,13 @@ static void cpu_write_word(uint32_t address, uint32_t value) {
 }
 
 static uint8_t cpu_pop_byte_mode(bool mode) {
-    return mem_read_byte(cpu_address_mode(cpu.registers.stack[mode].hl++, mode));
+    return mem_read_cpu(cpu_address_mode(cpu.registers.stack[mode].hl++, mode), false);
 }
 static uint8_t cpu_pop_byte(void) {
     return cpu_pop_byte_mode(cpu.L);
 }
 static void cpu_push_byte_mode(uint8_t value, bool mode) {
-    mem_write_byte(cpu_address_mode(--cpu.registers.stack[mode].hl, mode), value);
+    mem_write_cpu(cpu_address_mode(--cpu.registers.stack[mode].hl, mode), value);
 }
 static void cpu_push_byte(uint8_t value) {
     cpu_push_byte_mode(value, cpu.L);
@@ -170,11 +172,18 @@ static uint32_t cpu_pop_word(void) {
 
 static uint8_t cpu_read_in(uint16_t pio) {
     cpu.cycles += 2;
+    if (unprivileged_code())
+        return 0; // in returns 0 in unprivileged code
     return port_read_byte(pio);
 }
 
 static void cpu_write_out(uint16_t pio, uint8_t value) {
     cpu.cycles += 3;
+    if (unprivileged_code()) {
+        control.protectionStatus |= 2;
+        cpu_nmi();
+        gui_console_printf("[CEmu] NMI reset cause by an out instruction in unpriviledged code.\n");
+    }
     port_write_byte(pio, value);
 }
 
@@ -704,13 +713,18 @@ static void cpu_execute_bli() {
             case 2:
                 switch (xp) {
                     case 0x8: // INIM, INDM
-                    case 0x9: // INIMR, INDMR
                         cpu_write_byte(r->HL, new = cpu_read_in(r->C));
                         r->C += delta;
                         old = r->B--;
                         r->F = cpuflag_sign_b(r->B) | cpuflag_zero(r->B)
                             | cpuflag_halfcarry_b_sub(old, 0, 1)
                             | cpuflag_subtract(cpuflag_sign_b(new)) | cpuflag_undef(r->F);
+                        break;
+                    case 0x9: // INIMR, INDMR
+                        cpu_write_byte(r->HL, new = cpu_read_in(r->C));
+                        r->C += delta;
+                        r->flags.Z = --r->B == 0;
+                        r->flags.N = cpuflag_sign_b(new) != 0;
                         break;
                     case 0xA: // INI, IND
                     case 0xB: // INIR, INDR
@@ -769,7 +783,6 @@ static void cpu_execute_bli() {
                     // INI2R, IND2R, OTI2R, OTD2R
                     r->DE = cpu_mask_mode((int32_t)r->DE + delta, cpu.L);
                     r->flags.Z = cpu_dec_bc_partial_mode() == 0; // Do not mask BC
-                    r->flags.N = cpuflag_sign_b(new) != 0;
                     repeat &= !r->flags.Z;
                 } else {
                     if (xp & 2) { // OUTI2, OUTD2
@@ -780,8 +793,8 @@ static void cpu_execute_bli() {
                     // INI2, IND2, OUTI2, OUTD2
                     r->C += delta;
                     r->flags.Z = --r->B == 0;
-                    r->flags.N = cpuflag_sign_b(new);
                 }
+                r->flags.N = cpuflag_sign_b(new) != 0;
                 break;
             default:
                 cpu_trap();
@@ -842,6 +855,7 @@ void cpu_execute(void) {
     eZ80context_t context;
 
     uint32_t save_next = cpu.next;
+
     while (!exiting) {
     cpu_execute_continue:
         if (cpu.IEF_wait) {
@@ -877,6 +891,7 @@ void cpu_execute(void) {
             }
 #endif
         } else if (cpu.halted && cpu.cycles < cpu.next) {
+            cpu.cycles_offset -= cpu.next - cpu.cycles;
             cpu.cycles = cpu.next; // consume all of the cycles
         }
         if (exiting || cpu.cycles >= cpu.next) {

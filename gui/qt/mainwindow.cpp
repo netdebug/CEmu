@@ -1,17 +1,3 @@
-/* Copyright (C) 2015-2016
- * Parts derived from Firebird by Fabian Vogt
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
-*/
-
 #include <QtCore/QFileInfo>
 #include <QtCore/QRegularExpression>
 #include <QtNetwork/QNetworkAccessManager>
@@ -127,6 +113,8 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     connect(ui->checkCharging, &QCheckBox::toggled, this, &MainWindow::changeBatteryCharging);
     connect(ui->sliderBattery, &QSlider::valueChanged, this, &MainWindow::changeBatteryStatus);
     connect(ui->disassemblyView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::scrollDisasmView);
+    connect(ui->checkAddSpace, &QCheckBox::stateChanged, this, &MainWindow::addSpaceDisasm);
+    connect(ui->buttonZero, &QPushButton::clicked, this, &MainWindow::zeroClockCounter);
 
     // Debugger Options
     connect(ui->buttonAddEquateFile, &QPushButton::clicked, this, &MainWindow::addEquateFileDialog);
@@ -271,6 +259,7 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     autoCheckForUpdates(settings->value(QStringLiteral("autoUpdate"), false).toBool());
     setSaveOnClose(settings->value(QStringLiteral("saveOnClose"), true).toBool());
     setRestoreOnOpen(settings->value(QStringLiteral("restoreOnOpen"), true).toBool());
+    addSpaceDisasm(settings->value(QStringLiteral("addDisasmSpace"), false).toBool());
     ui->flashBytes->setValue(settings->value(QStringLiteral("flashBytesPerLine"), 8).toInt());
     ui->ramBytes->setValue(settings->value(QStringLiteral("ramBytesPerLine"), 8).toInt());
     ui->memBytes->setValue(settings->value(QStringLiteral("memBytesPerLine"), 8).toInt());
@@ -1382,6 +1371,7 @@ void MainWindow::setFont(int fontSize) {
     ui->pcregView->setFont(monospace);
     ui->lcdbaseView->setFont(monospace);
     ui->lcdcurrView->setFont(monospace);
+    ui->cycleView->setFont(monospace);
 }
 
 static int hex2int(QString str) {
@@ -1451,7 +1441,9 @@ void MainWindow::updateDebuggerChanges() {
     cpu.IEF1 = ui->checkIEF1->isChecked();
     cpu.IEF2 = ui->checkIEF2->isChecked();
 
+    debugger.total_cycles = static_cast<uint64_t>(ui->cycleView->text().toULongLong());
     uint32_t uiPC = static_cast<uint32_t>(hex2int(ui->pcregView->text()));
+
     if (cpu.registers.PC != uiPC) {
         cpu_flush(uiPC, ui->checkADL->isChecked());
     }
@@ -1543,6 +1535,8 @@ void MainWindow::setDebuggerState(bool state) {
     ui->groupFlash->setEnabled( debuggerOn );
     ui->groupRAM->setEnabled( debuggerOn );
     ui->groupMem->setEnabled( debuggerOn );
+    ui->cycleView->setEnabled( debuggerOn );
+    ui->freqView->setEnabled( debuggerOn );
 
     ui->actionRestoreState->setEnabled( !debuggerOn );
     ui->actionImportCalculatorState->setEnabled( !debuggerOn );
@@ -1550,6 +1544,11 @@ void MainWindow::setDebuggerState(bool state) {
     ui->buttonRefreshList->setEnabled( !debuggerOn );
     ui->emuVarView->setEnabled( !debuggerOn );
     ui->buttonReceiveFiles->setEnabled( !debuggerOn && inReceivingMode);
+}
+
+void MainWindow::zeroClockCounter() {
+    debugger.total_cycles = 0;
+    ui->cycleView->setText("0");
 }
 
 void MainWindow::changeDebuggerState() {
@@ -1652,6 +1651,10 @@ void MainWindow::populateDebugWindow() {
     ui->freqView->setPalette(tmp == ui->freqView->text() ? nocolorback : colorback);
     ui->freqView->setText(tmp);
 
+    tmp = QString::number(debugger.total_cycles);
+    ui->cycleView->setPalette(tmp == ui->cycleView->text() ? nocolorback : colorback);
+    ui->cycleView->setText(tmp);
+
     changeBatteryCharging(control.batteryCharging);
     changeBatteryStatus(control.setBatteryStatus);
 
@@ -1676,9 +1679,6 @@ void MainWindow::populateDebugWindow() {
 
     ui->bppView->setPalette(tmp == ui->bppView->text() ? nocolorback : colorback);
     ui->bppView->setText(tmp);
-
-    /* Mwhahaha */
-    ui->checkSleep->setChecked(false);
 
     ui->check3->setChecked(cpu.registers.flags._3);
     ui->check5->setChecked(cpu.registers.flags._5);
@@ -2402,6 +2402,12 @@ void MainWindow::updateWatchpointData(int currentRow) {
     }
 
     ui->watchpointView->item(currentRow, 2)->setText(int2hex(read, length << 1));
+}
+
+void MainWindow::addSpaceDisasm(bool b) {
+    ui->checkAddSpace->setChecked(b);
+    settings->setValue(QStringLiteral("addDisasmSpace"), b);
+    disasm.spacing_string = b ? ", " : ",";
 }
 
 void MainWindow::reloadROM() {

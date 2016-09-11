@@ -21,8 +21,7 @@ namespace Ui {
     class MainWindow;
 }
 
-class MainWindow : public QMainWindow
-{
+class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
@@ -139,7 +138,9 @@ private:
     void scrollDisasmView(int);
     void removeBreakpointAddress(QString);
     void removeWatchpointAddress(QString);
+    void zeroClockCounter();
     void updateDisassembly(int);
+    void addSpaceDisasm(bool);
     bool removeBreakpoint();
     bool removeWatchpoint();
     bool addBreakpoint();
@@ -216,7 +217,7 @@ private:
     // Reset
     void reloadROM();
     void resetCalculator();
-    
+
 #ifdef _WIN32
     // Win32 Console Toggle
     void toggleConsole();
