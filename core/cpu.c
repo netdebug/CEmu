@@ -31,7 +31,7 @@
 /* Global CPU state */
 eZ80cpu_t cpu;
 
-static void cpu_clear_mode(void) {
+static void cpu_clear_mode(void) 
 #ifdef DEBUG_SUPPORT
     debugger.data.block[cpu.registers.PC] |= DBG_INST_START_MARKER;
 #endif
