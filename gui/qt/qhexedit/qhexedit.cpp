@@ -1,8 +1,8 @@
-#include <QApplication>
-#include <QClipboard>
-#include <QKeyEvent>
-#include <QPainter>
-#include <QScrollBar>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QScrollBar>
+#include <QtGui/QClipboard>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QPainter>
 
 #include "qhexedit.h"
 
@@ -71,7 +71,7 @@ int QHexEdit::addressWidth() {
     if (sizeT > Q_INT64_C(0x100000000)){ n += 8; sizeT /= Q_INT64_C(0x100000000);}
     if (sizeT > 0x10000){ n += 4; sizeT /= 0x10000;}
     if (sizeT > 0x100){ n += 2; sizeT /= 0x100;}
-    if (sizeT > 0x10){ n += 1; sizeT /= 0x10;}
+    if (sizeT > 0x10){ n += 1; }
 
     if (n > _addressWidth) {
         return n;

@@ -5,7 +5,7 @@ if (0) { # GitHub release/deployment build. Has to correspond to the git tag.
     DEFINES += CEMU_VERSION=\\\"1.0\\\"
 } else { # Development build. Used in the about screen
     GIT_VERSION = $$system(git describe --abbrev=7 --dirty --always --tags)
-    DEFINES += CEMU_VERSION=\\\"0.5dev_$$GIT_VERSION\\\"
+    DEFINES += CEMU_VERSION=\\\"0.9dev_$$GIT_VERSION\\\"
 }
 
 # Continuous Integration (variable checked later)
@@ -14,7 +14,7 @@ CI = $$(CI)
 # Code beautifying
 DISTFILES += ../../.astylerc
 
-QT += core gui quick widgets quickwidgets network
+QT += core gui widgets network
 
 TARGET = CEmu
 TEMPLATE = app
@@ -32,16 +32,18 @@ CONFIG(release, debug|release) {
     DEFINES += QT_NO_DEBUG_OUTPUT
 } else {
     #This is a debug build
+    GLOBAL_FLAGS += -g3
 }
 
 # GCC/clang flags
 if (!win32-msvc*) {
-    GLOBAL_FLAGS    += -g3 -W -Wall -Wno-unused-parameter -Werror=shadow -Werror=write-strings -Werror=redundant-decls -Werror=format -Werror=format-security -Werror=declaration-after-statement -Werror=implicit-function-declaration -Werror=date-time -Werror=missing-prototypes -Werror=return-type -Werror=pointer-arith -Winit-self
+    GLOBAL_FLAGS    += -W -Wall -Wextra -Wunused-function -Werror=write-strings -Werror=redundant-decls -Werror=format -Werror=format-security -Werror=declaration-after-statement -Werror=implicit-function-declaration -Werror=date-time -Werror=missing-prototypes -Werror=return-type -Werror=pointer-arith -Winit-self
     GLOBAL_FLAGS    += -ffunction-sections -fdata-sections -fno-strict-overflow
     QMAKE_CFLAGS    += -std=gnu11
     QMAKE_CXXFLAGS  += -fno-exceptions
     isEmpty(CI) {
-        # Only enable opts and LTO for non-CI release builds
+        # Only enable opts for non-CI release builds
+        # -flto might cause an internal compiler error on GCC in some circumstances (with -g3?)... Comment it if needed.
         CONFIG(release, debug|release): GLOBAL_FLAGS += -O3 -flto
     }
 } else {
@@ -52,7 +54,9 @@ if (!win32-msvc*) {
 }
 
 if (macx|linux) {
+    # Be more secure by default...
     GLOBAL_FLAGS    += -fPIE -Wstack-protector -fstack-protector-strong --param=ssp-buffer-size=1
+    # Use ASAN on debug builds. Watch out about ODR crashes when built with -flto. detect_odr_violation=0 as an env var may help.
     CONFIG(debug, debug|release): GLOBAL_FLAGS += -fsanitize=address,bounds -fsanitize-undefined-trap-on-error -O0
 }
 
@@ -71,26 +75,34 @@ ios {
 macx: ICON = resources/icons/icon.icns
 
 SOURCES +=  utils.cpp \
-    main.cpp\
+    main.cpp \
     mainwindow.cpp \
     romselection.cpp \
     qtframebuffer.cpp \
     lcdwidget.cpp \
     emuthread.cpp \
-    qtkeypadbridge.cpp \
-    qmlbridge.cpp \
-    keymap.cpp \
     datawidget.cpp \
+    dockwidget.cpp \
     lcdpopout.cpp \
     searchwidget.cpp \
     basiccodeviewerwindow.cpp \
+    keypad/qtkeypadbridge.cpp \
+    keypad/keymap.cpp \
+    keypad/keypadwidget.cpp \
+    keypad/rectkey.cpp \
+    keypad/arrowkey.cpp \
     qhexedit/chunks.cpp \
     qhexedit/commands.cpp \
     qhexedit/qhexedit.cpp \
     capture/gif.cpp \
     tivarslib/utils_tivarslib.cpp \
+    tivarslib/TypeHandlers/DummyHandler.cpp \
     tivarslib/TypeHandlers/TH_0x00.cpp \
+    tivarslib/TypeHandlers/TH_0x01.cpp \
+    tivarslib/TypeHandlers/TH_0x02.cpp \
     tivarslib/TypeHandlers/TH_0x05.cpp \
+    tivarslib/TypeHandlers/TH_0x0C.cpp \
+    tivarslib/TypeHandlers/TH_0x0D.cpp \
     ../../tests/autotester/autotester.cpp \
     ../../core/asic.c \
     ../../core/cpu.c \
@@ -116,7 +128,15 @@ SOURCES +=  utils.cpp \
     ../../core/extras.c \
     ../../core/debug/disasm.cpp \
     ../../core/debug/debug.c \
-    ../../core/debug/stepping.cpp
+    ../../core/debug/stepping.cpp \
+    sendinghandler.cpp \
+    capture/optimize.c \
+    capture/opttemplate.c \
+    capture/gifread.c \
+    capture/gifwrite.c \
+    capture/quantize.c \
+    capture/giffunc.c \
+    capture/xform.c
 
 linux|macx|ios: SOURCES += ../../core/os/os-linux.c
 win32: SOURCES += ../../core/os/os-win32.c win32-console.cpp
@@ -127,13 +147,24 @@ HEADERS  +=  utils.h \
     qtframebuffer.h \
     lcdwidget.h \
     emuthread.h \
-    qtkeypadbridge.h \
-    qmlbridge.h \
-    keymap.h \
     datawidget.h \
+    dockwidget.h \
     lcdpopout.h \
     searchwidget.h \
     basiccodeviewerwindow.h \
+    keypad/qtkeypadbridge.h \
+    keypad/keymap.h \
+    keypad/keypadwidget.h \
+    keypad/key.h \
+    keypad/keyconfig.h \
+    keypad/rectkey.h \
+    keypad/graphkey.h \
+    keypad/secondkey.h \
+    keypad/alphakey.h \
+    keypad/otherkey.h \
+    keypad/numkey.h \
+    keypad/operkey.h \
+    keypad/arrowkey.h \
     qhexedit/chunks.h \
     qhexedit/commands.h \
     qhexedit/qhexedit.h \
@@ -142,12 +173,7 @@ HEADERS  +=  utils.h \
     tivarslib/autoloader.h \
     tivarslib/utils_tivarslib.h \
     tivarslib/TypeHandlers/TypeHandlerFuncGetter.h \
-    tivarslib/TypeHandlers/ITIVarTypeHandler.h \
-    tivarslib/TypeHandlers/TH_0x00.h \
-    tivarslib/TypeHandlers/TH_0x03.h \
-    tivarslib/TypeHandlers/TH_0x04.h \
-    tivarslib/TypeHandlers/TH_0x05.h \
-    tivarslib/TypeHandlers/TH_0x06.h \
+    tivarslib/TypeHandlers/TypeHandlers.h \
     ../../tests/autotester/autotester.h \
     ../../core/asic.h \
     ../../core/cpu.h \
@@ -177,7 +203,15 @@ HEADERS  +=  utils.h \
     ../../core/debug/debug.h \
     ../../core/debug/disasm.h \
     ../../core/debug/stepping.h \
-    cemuopts.h
+    cemuopts.h \
+    sendinghandler.h \
+    capture/kcolor.h \
+    capture/gifsicle.h \
+    capture/lcdf/clp.h \
+    capture/lcdf/inttypes.h \
+    capture/lcdfgif/gif.h \
+    capture/lcdfgif/gifx.h \
+    keypad/keycode.h
 
 FORMS    += mainwindow.ui \
     romselection.ui \

@@ -26,10 +26,10 @@ static void gpt_restore_state(int index) {
 static uint64_t gpt_next_event(int index) {
     struct sched_item *item = &sched.items[index];
     timer_state_t *timer = &gpt.timer[index -= SCHED_TIMER1];
-    int32_t invert, event;
-    uint32_t status = 0, temp;
-    uint64_t next;
     if (gpt.control >> index * 3 & 1) {
+        int32_t invert, event;
+        uint32_t status = 0;
+        uint64_t next;
         invert = (gpt.control >> (9 + index) & 1) ? ~0 : 0;
         if (!timer->counter) {
             timer->counter = timer->reset;
@@ -47,6 +47,7 @@ static uint64_t gpt_next_event(int index) {
         }
         next = (uint64_t)(timer->counter ^ invert) - invert;
         for (event = 1; event >= 0; event--) {
+            uint32_t temp;
             temp = (timer->counter - timer->match[event] + invert) ^ invert;
             if (!temp) {
                 status |= 1 << event;
@@ -92,8 +93,10 @@ static void gpt_some(int which, void update(int index)) {
     } while (++index < which);
 }
 
-static uint8_t gpt_read(uint16_t address) {
+static uint8_t gpt_read(uint16_t address, bool peek) {
     uint8_t value = 0;
+    (void)peek;
+
     gpt_some(address >> 4 & 0b11, gpt_restore_state);
     if (address < 0x40) {
         value = ((uint8_t *)&gpt)[address];
@@ -102,8 +105,10 @@ static uint8_t gpt_read(uint16_t address) {
     return value;
 }
 
-static void gpt_write(uint16_t address, uint8_t value) {
+static void gpt_write(uint16_t address, uint8_t value, bool peek) {
     int timer;
+    (void)peek;
+
     if (address >= 0x34 && address < 0x38) {
         ((uint8_t *)&gpt)[address] &= ~value;
     } else if (address < 0x3C) {

@@ -7,10 +7,9 @@
 interrupt_state_t intrpt;
 
 static void update() {
-    uint32_t status;
     size_t request;
     for (request = 0; request < sizeof(intrpt.request) / sizeof(*intrpt.request); request++) {
-        status = intrpt.status ^ intrpt.request[request].inverted;
+        uint32_t status = intrpt.status ^ intrpt.request[request].inverted;
         intrpt.request[request].status = (status & ~intrpt.request[request].latched) |
             ((intrpt.request[request].status | status) & intrpt.request[request].latched);
     }
@@ -34,14 +33,15 @@ void intrpt_reset() {
     memset(&intrpt, 0, sizeof(intrpt));
 }
 
-static uint8_t intrpt_read(uint16_t pio) {
+const uint32_t revision = 0x00010900;
+static uint8_t intrpt_read(uint16_t pio, bool peek) {
     uint16_t index = pio >> 2 & 0x3F;
     uint8_t request = pio >> 5 & 1;
     uint8_t bit_offset = (pio & 3) << 3;
 
     uint8_t value = 0;
 
-    static const uint32_t revision = 0x00010900;
+    (void)peek;
 
     switch(index) {
         case 0:
@@ -76,10 +76,12 @@ static uint8_t intrpt_read(uint16_t pio) {
     return value;
 }
 
-static void intrpt_write(uint16_t pio, uint8_t value) {
+static void intrpt_write(uint16_t pio, uint8_t value, bool peek) {
     uint16_t index = pio >> 2 & 0x3F;
     uint8_t request = pio >> 5 & 1;
     uint8_t bit_offset = (pio & 3) << 3;
+
+    (void)peek;
 
     switch(index) {
         case 1:

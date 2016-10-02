@@ -1,9 +1,9 @@
 #ifndef QHEXEDIT_H
 #define QHEXEDIT_H
 
-#include <QAbstractScrollArea>
-#include <QPen>
-#include <QBrush>
+#include <QtWidgets/QAbstractScrollArea>
+#include <QtGui/QPen>
+#include <QtGui/QBrush>
 
 #include "chunks.h"
 #include "commands.h"
@@ -23,7 +23,7 @@ class QHexEdit : public QAbstractScrollArea {
 
 public:
 
-    QHexEdit(QWidget *parent=0);
+    explicit QHexEdit(QWidget *parent = Q_NULLPTR);
 
     bool setData(QIODevice &iODevice);
     QByteArray dataAt(qint64 pos, qint64 count=-1);

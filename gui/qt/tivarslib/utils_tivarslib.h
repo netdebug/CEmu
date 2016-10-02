@@ -1,6 +1,6 @@
 /*
  * Part of tivars_lib_cpp
- * (C) 2015 Adrien 'Adriweb' Bertrand
+ * (C) 2015-2016 Adrien 'Adriweb' Bertrand
  * https://github.com/adriweb/tivars_lib_cpp
  * License: MIT
  */
@@ -8,9 +8,20 @@
 #ifndef TIVARSLIB_UTILS_H
 #define TIVARSLIB_UTILS_H
 
-#include <unordered_map>
-#include <vector>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cmath>
+#include <cfloat>
+
+#include <iostream>
+#include <sstream>
+#include <iomanip>
 #include <string>
+#include <vector>
+#include <regex>
+#include <algorithm>
+#include <unordered_map>
 
 typedef unsigned int    uint;
 typedef unsigned char   uchar;
@@ -30,13 +41,14 @@ unsigned char hexdec(const std::string& str);
 
 std::string dechex(unsigned char i);
 
+std::vector<std::string> explode(const std::string& str, const std::string& delim);
 std::vector<std::string> explode(const std::string& str, char delim);
 
-std::string& ltrim(std::string& s);
+std::string ltrim(std::string s, const char* t = " \t\n\r\f\v");
 
-std::string& rtrim(std::string& s);
+std::string rtrim(std::string s, const char* t = " \t\n\r\f\v");
 
-std::string& trim(std::string& s);
+std::string trim(std::string s, const char* t = " \t\n\r\f\v");
 
 std::string str_repeat(const std::string& str, unsigned int times);
 

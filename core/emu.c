@@ -28,7 +28,7 @@
 #include "cert.h"
 #include "os/os.h"
 
-#define imageVersion 0xCECE0006
+#define imageVersion 0xCECE0008
 
 uint32_t cpuEvents;
 volatile bool exiting;
@@ -140,9 +140,7 @@ bool emu_start(const char *romImage, const char *savedImage) {
                 break;
             }
             free(image);
-            if(imageFile) {
-                fclose(imageFile);
-            }
+            fclose(imageFile);
             ret = true;
         } else {
             asic_init();

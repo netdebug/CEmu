@@ -1,8 +1,8 @@
 #ifndef BASICCODEVIEWERWINDOW_H
 #define BASICCODEVIEWERWINDOW_H
 
-#include <QDialog>
-#include <QString>
+#include <QtWidgets/QDialog>
+#include <QtCore/QString>
 #include "tivarslib/autoloader.h"
 
 namespace Ui { class BasicCodeViewerWindow; }
@@ -11,7 +11,7 @@ class BasicCodeViewerWindow : public QDialog {
     Q_OBJECT
 
 public:
-    explicit BasicCodeViewerWindow(QWidget *p = 0);
+    explicit BasicCodeViewerWindow(QWidget *p = Q_NULLPTR);
     void setVariableName(const QString& name);
     void setOriginalCode(const QString& code) {
         originalCode = code;

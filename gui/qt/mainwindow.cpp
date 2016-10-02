@@ -2,16 +2,12 @@
 #include <QtCore/QRegularExpression>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtWidgets/QMessageBox>
-#include <QtWidgets/QDockWidget>
 #include <QtWidgets/QShortcut>
 #include <QtWidgets/QProgressDialog>
 #include <QtWidgets/QInputDialog>
 #include <QtWidgets/QComboBox>
-#include <QtQuickWidgets/QQuickWidget>
 #include <QtWidgets/QScrollBar>
-#include <QtGui/QFont>
-#include <QtGui/QPixmap>
-
+#include <QtNetwork/QNetworkReply>
 #include <fstream>
 
 #ifdef _MSC_VER
@@ -24,29 +20,23 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
+#include "sendinghandler.h"
 #include "lcdpopout.h"
-#include "emuthread.h"
-#include "qmlbridge.h"
-#include "qtframebuffer.h"
-#include "qtkeypadbridge.h"
+#include "dockwidget.h"
 #include "searchwidget.h"
 #include "basiccodeviewerwindow.h"
-#include "cemuopts.h"
 #include "utils.h"
 #include "capture/gif.h"
 
 #include "../../core/schedule.h"
-#include "../../core/debug/disasm.h"
 #include "../../core/link.h"
-#include "../../core/os/os.h"
 
 #include "../../tests/autotester/crc32.hpp"
 #include "../../tests/autotester/autotester.h"
 
 static const constexpr int WindowStateVersion = 0;
 
-MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::MainWindow) {
-    opts = cliOpts;
+MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) : QMainWindow(p), ui(new Ui::MainWindow), opts(cliOpts) {
 
     // Setup the UI1
     ui->setupUi(this);
@@ -58,18 +48,18 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     ui->console->setMaximumBlockCount(2000);
 
     // Register QtKeypadBridge for the virtual keyboard functionality
-    installEventFilter(&qt_keypad_bridge);
-    ui->lcdWidget->installEventFilter(&qt_keypad_bridge);
+    connect(&keypadBridge, &QtKeypadBridge::keyStateChanged, ui->keypadWidget, &KeypadWidget::changeKeyState);
+    installEventFilter(&keypadBridge);
+    ui->lcdWidget->installEventFilter(&keypadBridge);
     // Same for all the tabs/docks (iterate over them instead of harcoding their names)
     for (const auto& tab : ui->tabWidget->children()[0]->children()) {
-        tab->installEventFilter(&qt_keypad_bridge);
+        tab->installEventFilter(&keypadBridge);
     }
-
-    ui->keypadWidget->setResizeMode(QQuickWidget::ResizeMode::SizeRootObjectToView);
 
     // Emulator -> GUI
     connect(&emu, &EmuThread::consoleStr, this, &MainWindow::consoleStr);
     connect(&emu, &EmuThread::errConsoleStr, this, &MainWindow::errConsoleStr);
+    connect(&emu, &EmuThread::started, this, &MainWindow::started, Qt::QueuedConnection);
     connect(&emu, &EmuThread::restored, this, &MainWindow::restored, Qt::QueuedConnection);
     connect(&emu, &EmuThread::saved, this, &MainWindow::saved, Qt::QueuedConnection);
     connect(&emu, &EmuThread::isBusy, this, &MainWindow::isBusy, Qt::QueuedConnection);
@@ -125,7 +115,6 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     // Linking
     connect(ui->buttonSend, &QPushButton::clicked, this, &MainWindow::selectFiles);
     connect(ui->actionOpen, &QAction::triggered, this, &MainWindow::selectFiles);
-    connect(this, &MainWindow::setSendState, &emu, &EmuThread::setSendState);
     connect(ui->buttonRefreshList, &QPushButton::clicked, this, &MainWindow::refreshVariableList);
     connect(this, &MainWindow::setReceiveState, &emu, &EmuThread::setReceiveState);
     connect(ui->buttonReceiveFiles, &QPushButton::clicked, this, &MainWindow::saveSelected);
@@ -205,6 +194,18 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     connect(ui->radioWabbitemuKeys, &QRadioButton::clicked, this, &MainWindow::keymapChanged);
     connect(ui->radiojsTIfiedKeys, &QRadioButton::clicked, this, &MainWindow::keymapChanged);
 
+    // Keypad Coloring
+    connect(ui->buttonTrueBlue,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonDenim,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonPink,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonPlum,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonRed,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonLightning,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonGolden,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonWhite,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonBlack,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+    connect(ui->buttonSilver,  &QPushButton::clicked, this, &MainWindow::selectKeypadColor);
+
     // Auto Updates
     connect(ui->checkUpdates, &QCheckBox::stateChanged, this, &MainWindow::autoCheckForUpdates);
 
@@ -248,8 +249,12 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     installToggleConsole();
 #endif
 
-    changeThrottleMode(Qt::Checked);
-    emu.rom = settings->value(QStringLiteral("romImage")).toString().toStdString();
+    changeThrottleMode(opts.useUnthrottled ? Qt::Unchecked : Qt::Checked);
+    if(opts.RomFile.isEmpty()) {
+        emu.rom = settings->value(QStringLiteral("romImage")).toString().toStdString();
+    } else {
+        emu.rom = opts.RomFile.toStdString();
+    }
     changeFrameskip(settings->value(QStringLiteral("frameskip"), 3).toUInt());
     changeScale(settings->value(QStringLiteral("scale"), 100).toUInt());
     toggleSkin(settings->value(QStringLiteral("skin"), 1).toBool());
@@ -325,6 +330,8 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
     pix.load(":/icons/resources/icons/run.png");
     runIcon.addPixmap(pix);
 
+    ui->lcdWidget->setFocus();
+
     if (opts.AutotesterFile != ""){
         if(openJSONConfig(opts.AutotesterFile)==0)
         {
@@ -333,7 +340,7 @@ MainWindow::MainWindow(CEmuOpts cliOpts,QWidget *p) :QMainWindow(p), ui(new Ui::
            QThread::msleep(500);
            launchTest();
         }
-   }
+    }
 
 }
 
@@ -346,12 +353,36 @@ MainWindow::~MainWindow() {
     settings->setValue(QStringLiteral("flashBytesPerLine"), ui->flashBytes->value());
     settings->setValue(QStringLiteral("ramBytesPerLine"), ui->ramBytes->value());
     settings->setValue(QStringLiteral("memBytesPerLine"), ui->memBytes->value());
+    settings->setValue(QStringLiteral("keypadColor"), ui->keypadWidget->getCurrColor());
 
     delete settings;
     delete ui->flashEdit;
     delete ui->ramEdit;
     delete ui->memEdit;
     delete ui;
+}
+
+void MainWindow::selectKeypadColor() {
+    QObject *senderObj = sender();
+    QString senderObjName = senderObj->objectName();
+    unsigned keypad_color = KEYPAD_BLACK;
+
+    if(senderObjName == "buttonWhite") keypad_color = KEYPAD_WHITE;
+    if(senderObjName == "buttonBlack") keypad_color = KEYPAD_BLACK;
+    if(senderObjName == "buttonGolden") keypad_color = KEYPAD_GOLDEN;
+    if(senderObjName == "buttonPlum") keypad_color = KEYPAD_PLUM;
+    if(senderObjName == "buttonPink") keypad_color = KEYPAD_PINK;
+    if(senderObjName == "buttonRed") keypad_color = KEYPAD_RED;
+    if(senderObjName == "buttonLightning") keypad_color = KEYPAD_LIGHTNING;
+    if(senderObjName == "buttonTrueBlue") keypad_color = KEYPAD_TRUE_BLUE;
+    if(senderObjName == "buttonDenim") keypad_color = KEYPAD_DENIM;
+    if(senderObjName == "buttonSilver") keypad_color = KEYPAD_SILVER;
+
+    setKeypadColor(keypad_color);
+}
+
+void MainWindow::setKeypadColor(unsigned color) {
+    ui->keypadWidget->setType(get_device_type(), color);
 }
 
 void MainWindow::changeImagePath() {
@@ -439,7 +470,13 @@ void MainWindow::exportRom() {
     }
 }
 
+void MainWindow::started(bool success) {
+    if(success) {
+        setKeypadColor(settings->value(QStringLiteral("keypadColor"), true).toUInt());
+    }
+}
 void MainWindow::restored(bool success) {
+    started(success);
     if(success) {
         showStatusMsg(tr("Emulation restored from image."));
     } else {
@@ -464,47 +501,17 @@ void MainWindow::saved(bool success) {
 }
 
 void MainWindow::dropEvent(QDropEvent *e) {
-    const QMimeData* mime_data = e->mimeData();
-    if (!mime_data->hasUrls()) {
-        return;
+    if(inReceivingMode) {
+        return e->ignore();
     }
-
-    QStringList files;
-    for(auto &&url : mime_data->urls()) {
-        files.append(url.toLocalFile());
-    }
-
-    sendFiles(files);
+    sending_handler.dropOccured(e, LINK_FILE);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *e) {
-    if (e->mimeData()->hasUrls() == false || inReceivingMode) {
+    if(inReceivingMode) {
         return e->ignore();
     }
-
-    for(QUrl &url : e->mimeData()->urls()) {
-        static const QStringList valid_suffixes = { QStringLiteral("8xp"),
-                                                    QStringLiteral("8xv"),
-                                                    QStringLiteral("8xl"),
-                                                    QStringLiteral("8xn"),
-                                                    QStringLiteral("8xm"),
-                                                    QStringLiteral("8xy"),
-                                                    QStringLiteral("8xg"),
-                                                    QStringLiteral("8xs"),
-                                                    QStringLiteral("8xd"),
-                                                    QStringLiteral("8xw"),
-                                                    QStringLiteral("8xc"),
-                                                    QStringLiteral("8xz"),
-                                                    QStringLiteral("8xt"),
-                                                    QStringLiteral("8ca"),
-                                                    QStringLiteral("8ci") };
-
-        QFileInfo file(url.fileName());
-        if(!valid_suffixes.contains(file.suffix().toLower()))
-            return e->ignore();
-    }
-
-    e->accept();
+    sending_handler.dragOccured(e);
 }
 
 void MainWindow::closeEvent(QCloseEvent *e) {
@@ -524,7 +531,7 @@ void MainWindow::closeEvent(QCloseEvent *e) {
     }
 
     if (!emu.stop()) {
-        qDebug("Thread Termmination Failed.");
+        qDebug("Thread Termination Failed.");
     }
 
     speedUpdateTimer.stop();
@@ -611,22 +618,18 @@ void MainWindow::setUIMode(bool docks_enabled) {
     ui->menubar->insertMenu(ui->menuAbout->menuAction(), docksMenu);
 
     //Convert the tabs into QDockWidgets
-    QDockWidget *last_dock = nullptr;
+    DockWidget *last_dock = nullptr;
     while(ui->tabWidget->count()) {
-        QDockWidget *dw = new QDockWidget(ui->tabWidget->tabText(0));
-        dw->setWindowIcon(ui->tabWidget->tabIcon(0));
-        dw->setObjectName(dw->windowTitle());
+        DockWidget *dw = new DockWidget(ui->tabWidget, this);
 
         // Fill "Docks" menu
         QAction *action = dw->toggleViewAction();
         action->setIcon(dw->windowIcon());
         docksMenu->addAction(action);
 
-        QWidget *tab = ui->tabWidget->widget(0);
-        if(tab == ui->tabDebugger)
+        QWidget *tab = dw->widget();
+        if (tab == ui->tabDebugger)
             debuggerDock = dw;
-
-        dw->setWidget(tab);
 
         addDockWidget(Qt::RightDockWidgetArea, dw);
         if(last_dock != nullptr)
@@ -688,19 +691,27 @@ void MainWindow::screenshotGIF() {
 
 void MainWindow::recordGIF() {
   static QString path;
+  static QString opt_path;
 
   if (path.isEmpty()) {
       // TODO: Use QTemporaryFile?
-      path = QDir::tempPath() + QDir::separator() + QStringLiteral("cemu_tmp.gif");
-
+        path = QDir::tempPath() + QDir::separator() + QStringLiteral("cemu_tmp.gif");
+        opt_path = QDir::tempPath() + QDir::separator() + QStringLiteral("cemu_opt_tmp.gif");
         gif_start_recording(path.toStdString().c_str(), ui->frameskipSlider->value());
     } else {
         if (gif_stop_recording()) {
-            saveScreenshot(tr("GIF images (*.gif)"), QStringLiteral("gif"), path);
+            if(!(gif_optimize(path.toStdString().c_str(), opt_path.toStdString().c_str()))) {
+                QFile(path).remove();
+                QMessageBox::warning(this, tr("GIF Optimization Failed"), tr("A failure occured during recording"));
+            } else {
+                QFile(path).remove();
+                saveScreenshot(tr("GIF images (*.gif)"), QStringLiteral("gif"), opt_path);
+            }
         } else {
             QMessageBox::warning(this, tr("Failed recording GIF"), tr("A failure occured during recording"));
         }
         path = QString();
+        opt_path = QString();
     }
 
     ui->frameskipSlider->setEnabled(path.isEmpty());
@@ -845,7 +856,7 @@ void MainWindow::adjustScreen() {
 }
 
 int MainWindow::reprintScale(int scale) {
-    int roundedScale = round(scale / 50.0) * 50;
+    int roundedScale = round(scale / 25.0) * 25;
     ui->scaleLabel->setText(QString::number(roundedScale) + "%");
     return roundedScale;
 }
@@ -905,7 +916,7 @@ void MainWindow::keymapChanged() {
 
 void MainWindow::changeKeymap(const QString & value) {
     settings->setValue(QStringLiteral("keyMap"), value);
-    qt_keypad_bridge.setKeymap(value);
+    keypadBridge.setKeymap(value);
 }
 
 void MainWindow::alwaysOnTop(int state) {
@@ -931,7 +942,6 @@ QStringList MainWindow::showVariableFileDialog(QFileDialog::AcceptMode mode, QSt
     dialog.setFileMode(mode == QFileDialog::AcceptOpen ? QFileDialog::ExistingFiles : QFileDialog::AnyFile);
     dialog.setDirectory(currentDir);
     dialog.setNameFilter(name_filter);
-    dialog.setDefaultSuffix("8xg");
     good = dialog.exec();
 
     currentDir = dialog.directory();
@@ -943,55 +953,14 @@ QStringList MainWindow::showVariableFileDialog(QFileDialog::AcceptMode mode, QSt
     return QStringList();
 }
 
-void MainWindow::sendFiles(QStringList fileNames) {
-    if (inDebugger) {
-        return;
-    }
-
-    setSendState(true);
-    const unsigned int fileNum = fileNames.size();
-
-    if (fileNum == 0) {
-        setSendState(false);
-        return;
-    }
-
-    /* Wait for an open link */
-    emu_thread->waitForLink = true;
-    do {
-        QThread::msleep(50);
-    } while(emu_thread->waitForLink);
-
-    QProgressDialog progress("Sending Files...", QString(), 0, fileNum, this);
-    progress.setWindowModality(Qt::WindowModal);
-
-    progress.show();
-    QApplication::processEvents();
-
-    for (unsigned int i = 0; i < fileNum; i++) {
-        if(!sendVariableLink(fileNames.at(i).toUtf8())) {
-            QMessageBox::warning(this, tr("Failed Transfer"), tr("A failure occured during transfer of: ")+fileNames.at(i));
-        }
-        progress.setLabelText(fileNames.at(i).toUtf8());
-        progress.setValue(progress.value()+1);
-        QApplication::processEvents();
-    }
-
-    progress.setValue(progress.value()+1);
-    QApplication::processEvents();
-    QThread::msleep(100);
-
-    setSendState(false);
-}
-
 void MainWindow::selectFiles() {
     if (debuggerOn) {
        return;
     }
 
-    QStringList fileNames = showVariableFileDialog(QFileDialog::AcceptOpen, tr("TI Variable (*.8xp *.8xv *.8xl *.8xn *.8xm *.8xy *.8xg *.8xs *.8xd *.8xw *.8xc *.8xl *.8xz *.8xt *.8ca, *.8cg, *.8ci, *.8ek);;All Files (*.*)"));
+    QStringList fileNames = showVariableFileDialog(QFileDialog::AcceptOpen, tr("TI Variable (*.8xp *.8xv *.8xl *.8xn *.8xm *.8xy *.8xg *.8xs *.8xd *.8xw *.8xc *.8xl *.8xz *.8xt *.8ca *.8cg *.8ci *.8ek);;All Files (*.*)"));
 
-    sendFiles(fileNames);
+    sending_handler.sendFiles(fileNames, LINK_FILE);
 }
 
 void MainWindow::variableClicked(QTableWidgetItem *item) {
@@ -1006,7 +975,6 @@ void MainWindow::variableClicked(QTableWidgetItem *item) {
 }
 
 void MainWindow::refreshVariableList() {
-    int currentRow;
     calc_var_t var;
 
     while(ui->emuVarView->rowCount() > 0) {
@@ -1036,6 +1004,8 @@ void MainWindow::refreshVariableList() {
         vars.clear();
         while (vat_search_next(&var)) {
             if (var.size > 2) {
+                int currentRow;
+
                 vars.append(var);
                 currentRow = ui->emuVarView->rowCount();
                 ui->emuVarView->setRowCount(currentRow + 1);
@@ -1091,7 +1061,6 @@ void MainWindow::refreshVariableList() {
 }
 
 void MainWindow::saveSelected() {
-    uint8_t i;
     constexpr const char* var_extension[] = {
         "8xn",  // 00
         "8xl",
@@ -1149,7 +1118,7 @@ void MainWindow::saveSelected() {
         QMessageBox::warning(this, tr("No transfer to do"), tr("Select at least one file to transfer"));
     } else {
         if (selectedVars.size() == 1) {
-            i = selectedVars.at(0).type1;
+            uint8_t i = selectedVars.at(0).type1;
             fileNames = showVariableFileDialog(QFileDialog::AcceptSave, "TI "+QString(calc_var_type_names[i])+" (*."+var_extension[i]+");;All Files (*.*)");
         } else {
             fileNames = showVariableFileDialog(QFileDialog::AcceptSave, tr("TI Group (*.8cg);;All Files (*.*)"));
@@ -1189,8 +1158,12 @@ int MainWindow::openJSONConfig(const QString& jsonPath) {
 
     if (ifs.good())
     {
+        int ok = chdir(QDir::toNativeSeparators(QFileInfo(jsonPath).absoluteDir().path()).toStdString().c_str());
         ui->buttonReloadJSONconfig->setEnabled(true);
-        chdir(QDir::toNativeSeparators(QFileInfo(jsonPath).absoluteDir().path()).toStdString().c_str());
+        if (ok != 0) {
+            QMessageBox::warning(this, tr("Internal Autotester error"), tr("Couldn't go to where the JSON file is."));
+            return 0;
+        }
         std::getline(ifs, jsonContents, '\0');
         if (!ifs.eof()) {
             QMessageBox::warning(this, tr("File error"), tr("Couldn't read JSON file."));
@@ -1255,7 +1228,7 @@ void MainWindow::launchTest() {
     for (const auto& file : autotester::config.transfer_files) {
         filesList << QString::fromStdString(file);
     }
-    sendFiles(filesList);
+    sending_handler.sendFiles(filesList, LINK_FILE);
     QThread::msleep(200);
 
     // Follow the sequence
@@ -1725,15 +1698,14 @@ void MainWindow::updateTIOSView() {
     QString calcData,calcData2;
     QString opType;
     uint8_t gotData[11];
-    uint8_t index;
 
     ui->opView->clear();
     ui->vatView->clear();
 
     for(uint32_t i = 0xD005F8; i<0xD005F8+11*6; i+=11) {
+        uint8_t index = 0;
         calcData.clear();
         opType.clear();
-        index = 0;
         for(uint32_t j = i; j < i+11; j++) {
             gotData[index] = mem_peek_byte(j);
             calcData += int2hex(gotData[index], 2)+" ";
@@ -2422,9 +2394,9 @@ void MainWindow::reloadROM() {
 
     if (emu.stop()) {
         emu.start();
-        qDebug("Reload Successful.");
+        consoleStr("[CEmu] Reload Successful.\n");
     } else {
-        qDebug("Reload Failed.");
+        consoleStr("[CEmu] Reload Failed.\n");
     }
 }
 
@@ -2638,7 +2610,7 @@ void MainWindow::opContextMenu(const QPoint& posa) {
 }
 
 void MainWindow::createLCD() {
-    LCDPopout *p = new LCDPopout();
+    LCDPopout *p = new LCDPopout(&keypadBridge);
     p->show();
 }
 
@@ -3035,8 +3007,6 @@ void MainWindow::addEquateFileDialog() {
 
     if (!good) { return; }
 
-    std::string current;
-    std::ifstream in;
     addEquateFile(dialog.selectedFiles().first());
 }
 
@@ -3081,7 +3051,7 @@ void MainWindow::addEquateFile(QString fileName) {
 }
 
 void MainWindow::scrollDisasmView(int value) {
-    if (value >= ui->disassemblyView->verticalScrollBar()->maximum() && value > 0x100) {
+    if (value >= ui->disassemblyView->verticalScrollBar()->maximum()) {
         ui->disassemblyView->verticalScrollBar()->blockSignals(true);
         drawNextDisassembleLine();
         ui->disassemblyView->verticalScrollBar()->setValue(ui->disassemblyView->verticalScrollBar()->maximum()-1);

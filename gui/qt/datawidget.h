@@ -1,21 +1,21 @@
 #ifndef CODEEDITOR_H
 #define CODEEDITOR_H
 
-#include <QPlainTextEdit>
-#include <QObject>
+#include <QtWidgets/QPlainTextEdit>
+#include <QtCore/QObject>
 
 QT_BEGIN_NAMESPACE
-class QPaintEvent;
-class QResizeEvent;
-class QSize;
-class QWidget;
+    class QPaintEvent;
+    class QResizeEvent;
+    class QSize;
+    class QWidget;
 QT_END_NAMESPACE
 
 class DataWidget : public QPlainTextEdit {
     Q_OBJECT
 
 public:
-    DataWidget(QWidget *parent = 0);
+    explicit DataWidget(QWidget *parent = Q_NULLPTR);
     void clearAllHighlights();
     void updateAllHighlights();
     void addHighlight(QColor);

@@ -7,26 +7,25 @@
 #include <QtWidgets/QTableWidgetItem>
 #include <QtWidgets/QFileDialog>
 #include <QtCore/QSettings>
-#include <QTextCursor>
+#include <QtGui/QTextCursor>
 #include "cemuopts.h"
 #include "lcdwidget.h"
 #include "romselection.h"
 #include "emuthread.h"
+#include "keypad/qtkeypadbridge.h"
 #include "../../core/vat.h"
 #include "../../core/debug/debug.h"
 #include "../../core/debug/disasm.h"
 #include "qhexedit/qhexedit.h"
 
-namespace Ui {
-    class MainWindow;
-}
+namespace Ui { class MainWindow; }
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
 
-    explicit MainWindow(CEmuOpts opts,QWidget *p = 0);
+    explicit MainWindow(CEmuOpts opts,QWidget *p = Q_NULLPTR);
     ~MainWindow();
 
 public slots:
@@ -43,6 +42,7 @@ public slots:
 
     // Saved/Restored State
     void saved(bool);
+    void started(bool);
     void restored(bool);
 
     // Other
@@ -153,6 +153,8 @@ private:
     void addEquateFile(QString);
     void clearEquateFile();
     void refreshEquateFile();
+    void selectKeypadColor();
+    void setKeypadColor(unsigned color);
 
     // Speed
     void changeEmulatedSpeed(int);
@@ -175,7 +177,6 @@ private:
 
     // Linking
     QStringList showVariableFileDialog(QFileDialog::AcceptMode, QString name_filter);
-    void sendFiles(QStringList);
     void selectFiles();
     void refreshVariableList();
     void variableClicked(QTableWidgetItem*);
@@ -229,6 +230,7 @@ private:
     QString searchingString;
 
     Ui::MainWindow *ui = nullptr;
+    QtKeypadBridge keypadBridge{this};
     QLabel statusLabel;
     QSettings *settings = nullptr;
     QDockWidget *debuggerDock = nullptr;
@@ -274,8 +276,5 @@ private:
     int pc_line;
     int curr_line;
 };
-
-// Used as global instance by EmuThread and Debugger class
-extern MainWindow *main_window;
 
 #endif
