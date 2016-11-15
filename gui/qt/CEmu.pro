@@ -94,6 +94,7 @@ SOURCES +=  utils.cpp \
     debugger.cpp \
     hexeditor.cpp \
     settings.cpp \
+    luascripting.cpp \
     basiccodeviewerwindow.cpp \
     keypad/qtkeypadbridge.cpp \
     keypad/keymap.cpp \

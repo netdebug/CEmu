@@ -19,6 +19,7 @@
 #include "keypad/qtkeypadbridge.h"
 #include "qhexedit/qhexedit.h"
 
+#include "../../core/cpu.h"
 #include "../../core/vat.h"
 #include "../../core/debug/debug.h"
 #include "../../core/debug/disasm.h"
