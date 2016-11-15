@@ -89,7 +89,7 @@ SOURCES +=  utils.cpp \
     datawidget.cpp \
     dockwidget.cpp \
     lcdpopout.cpp \
-    searchwidget.cpp \ \
+    searchwidget.cpp \
     sendinghandler.cpp \
     debugger.cpp \
     hexeditor.cpp \
