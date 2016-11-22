@@ -18,9 +18,8 @@ public:
 
     void doStuff();
     void throttleTimerWait();
-
-    std::string rom, imagePath;
     volatile bool waitForLink = false;
+    QString rom, image;
 
 signals:
     // Debugger
@@ -31,7 +30,7 @@ signals:
 
     // I/O
     void consoleStr(QString);
-    void errConsoleStr(QString);
+    void consoleErrStr(QString);
     void exited(int);
 
     // Status
@@ -57,13 +56,14 @@ public slots:
     void setDebugStepOverMode();
     void setDebugStepNextMode();
     void setDebugStepOutMode();
+    void setRunUntilMode();
 
     // Linking
     void setSendState(bool);
     void setReceiveState(bool);
 
     // Speed
-    void changeEmuSpeed(int);
+    void setEmuSpeed(int);
     void changeThrottleMode(bool);
 
     // Save/Restore
@@ -83,7 +83,7 @@ private:
     bool enterReceiveState = false;
     bool throttleOn = true;
     std::chrono::steady_clock::time_point lastTime;
-    std::string exportRomPath;
+    QString romExportPath;
     volatile bool saveImage = false;
     volatile bool saveRom = false;
     volatile bool doRestore = false;

@@ -67,11 +67,6 @@ QMAKE_CFLAGS    += $$GLOBAL_FLAGS
 QMAKE_CXXFLAGS  += $$GLOBAL_FLAGS
 QMAKE_LFLAGS    += $$GLOBAL_FLAGS
 
-ios {
-    DEFINES += IS_IOS_BUILD
-    QMAKE_INFO_PLIST = Info.plist
-}
-
 macx: ICON = resources/icons/icon.icns
 
 SOURCES +=  utils.cpp \
@@ -103,6 +98,13 @@ SOURCES +=  utils.cpp \
     tivarslib/TypeHandlers/TH_0x05.cpp \
     tivarslib/TypeHandlers/TH_0x0C.cpp \
     tivarslib/TypeHandlers/TH_0x0D.cpp \
+    tivarslib/TypeHandlers/TH_0x1B.cpp \
+    tivarslib/TypeHandlers/TH_0x1C.cpp \
+    tivarslib/TypeHandlers/TH_0x1D.cpp \
+    tivarslib/TypeHandlers/TH_0x1E.cpp \
+    tivarslib/TypeHandlers/TH_0x1F.cpp \
+    tivarslib/TypeHandlers/TH_0x20.cpp \
+    tivarslib/TypeHandlers/TH_0x21.cpp \
     ../../tests/autotester/autotester.cpp \
     ../../core/asic.c \
     ../../core/cpu.c \
@@ -128,7 +130,7 @@ SOURCES +=  utils.cpp \
     ../../core/extras.c \
     ../../core/debug/disasm.cpp \
     ../../core/debug/debug.c \
-    ../../core/debug/stepping.cpp \
+    ../../core/debug/profiler.c \
     sendinghandler.cpp \
     capture/optimize.c \
     capture/opttemplate.c \
@@ -136,9 +138,13 @@ SOURCES +=  utils.cpp \
     capture/gifwrite.c \
     capture/quantize.c \
     capture/giffunc.c \
-    capture/xform.c
+    capture/xform.c \
+    debugger.cpp \
+    hexeditor.cpp \
+    settings.cpp \
+    ../../core/debug/stepping.cpp
 
-linux|macx|ios: SOURCES += ../../core/os/os-linux.c
+linux|macx: SOURCES += ../../core/os/os-linux.c
 win32: SOURCES += ../../core/os/os-win32.c win32-console.cpp
 
 HEADERS  +=  utils.h \
@@ -203,6 +209,7 @@ HEADERS  +=  utils.h \
     ../../core/debug/debug.h \
     ../../core/debug/disasm.h \
     ../../core/debug/stepping.h \
+    ../../core/debug/profiler.h \
     cemuopts.h \
     sendinghandler.h \
     capture/kcolor.h \
@@ -211,7 +218,8 @@ HEADERS  +=  utils.h \
     capture/lcdf/inttypes.h \
     capture/lcdfgif/gif.h \
     capture/lcdfgif/gifx.h \
-    keypad/keycode.h
+    keypad/keycode.h \
+    debugger.h
 
 FORMS    += mainwindow.ui \
     romselection.ui \

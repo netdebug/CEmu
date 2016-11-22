@@ -23,7 +23,7 @@ namespace tivars
     uchar lengthOfLongestTokenName;
     std::vector<uchar> firstByteOfTwoByteTokens;
 
-    data_t TH_0x05::makeDataFromString(const string& str, const options_t options)
+    data_t TH_0x05::makeDataFromString(const string& str, const options_t& options)
     {
         (void)options;
         data_t data;
@@ -40,7 +40,7 @@ namespace tivars
             for (uint currentLength = lengthOfLongestTokenName; currentLength > 0; currentLength--)
             {
                 string currentSubString = str.substr(strCursorPos, currentLength);
-                if (is_in_umap_string_uint(tokens_NameToBytes, currentSubString))
+                if (tokens_NameToBytes.count(currentSubString))
                 {
                     uint tokenValue = tokens_NameToBytes[currentSubString];
                     if (tokenValue > 0xFF)
@@ -59,7 +59,7 @@ namespace tivars
         return data;
     }
 
-    string TH_0x05::makeStringFromData(const data_t& data, const options_t options)
+    string TH_0x05::makeStringFromData(const data_t& data, const options_t& options)
     {
         if (data.size() < 2)
         {
@@ -227,7 +227,7 @@ namespace tivars
                 }
             }
 
-            inputFile.close();
+            (inputFile.*(&QFile::close))(); // Compiler/Linker weirdness when in LTO (undefined symbol).
         } else {
             std::cerr << "Could not open the tokens csv file" << std::endl;
         }

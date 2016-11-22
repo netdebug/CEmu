@@ -7,17 +7,18 @@ extern "C" {
 
 #include "port.h"
 
-#define INT_ON        0
-#define INT_TIMER1    1
-#define INT_TIMER2    2
-#define INT_TIMER3    3
-#define INT_OSTMR     4
-#define INT_KEYPAD    10
-#define INT_LCD       11
-#define INT_RTC       12
-#define INT_PWR       15
+#define INT_ON        (1 <<  0)
+#define INT_TIMER1    (1 <<  1)
+#define INT_TIMER2    (1 <<  2)
+#define INT_TIMER3    (1 <<  3)
+#define INT_OSTMR     (1 <<  4)
+#define INT_KEYPAD    (1 << 10)
+#define INT_LCD       (1 << 11)
+#define INT_RTC       (1 << 12)
+#define INT_PWR       (1 << 15)
+#define INT_WAKE      (1 << 19)
 
-typedef struct interrupt_request {
+typedef struct interrupt_state {
     uint32_t status   : 22;
     uint32_t          :  2;
     uint32_t enabled  : 22;
@@ -26,15 +27,10 @@ typedef struct interrupt_request {
     uint32_t          :  2;
     uint32_t inverted : 22;
     uint32_t          :  2;
-} interrupt_request_t;
-
-PACK(typedef struct interrupt_state {
-    uint32_t status;
-    interrupt_request_t request[2];
-}) interrupt_state_t;
+} interrupt_state_t;
 
 /* External INTERRUPT state */
-extern interrupt_state_t intrpt;
+extern interrupt_state_t intrpt[2];
 
 /* Available Functions */
 eZ80portrange_t init_intrpt(void);

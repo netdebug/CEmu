@@ -29,7 +29,7 @@ PACK(typedef struct emu_image {
     eZ80cpu_t cpu;
     usb_state_t usb;
     flash_state_t flash;
-    interrupt_state_t intrpt;
+    interrupt_state_t intrpt[2];
     watchdog_state_t watchdog;
     protected_state_t protect;
     cxxx_state_t cxxx;
@@ -75,7 +75,7 @@ void gui_console_err_printf(const char *, ...);
 void gui_debugger_send_command(int, uint32_t);
 void gui_render_gif_frame(void);
 void gui_set_busy(bool);
-void gui_emu_sleep(void);
+void gui_emu_sleep(unsigned long);
 
 bool emu_start(const char*,const char*);
 void emu_loop(bool);

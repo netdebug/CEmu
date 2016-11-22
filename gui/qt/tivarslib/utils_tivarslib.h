@@ -32,8 +32,6 @@ typedef std::unordered_map<std::string, uchar>   options_t;
 bool is_in_vector_uchar(const std::vector<unsigned char>& v, unsigned char element);
 bool is_in_vector_uint(const std::vector<unsigned int>& v, unsigned int element);
 bool is_in_vector_string(const std::vector<std::string>& v, std::string element);
-bool is_in_umap_string_uchar(const std::unordered_map<std::string, unsigned char>& m, const std::string element);
-bool is_in_umap_string_uint(const std::unordered_map<std::string, unsigned int>& m, const std::string element);
 
 bool has_option(const std::unordered_map<std::string, unsigned char>& m, const std::string element);
 
@@ -59,5 +57,9 @@ bool is_numeric(const std::string& str);
 std::string stripchars(std::string str, const std::string& chars);
 
 std::string str_pad(const std::string& str, unsigned long pad_length, std::string pad_string = " ");
+
+std::string dec2frac(double num, double err = 0.001);
+
+std::string trimZeros(const std::string& str);
 
 #endif

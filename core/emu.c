@@ -1,17 +1,3 @@
-/* Copyright (C) 2015  Fabian Vogt
- * Modified for the CE calculator by CEmu developers
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
-*/
-
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -28,7 +14,7 @@
 #include "cert.h"
 #include "os/os.h"
 
-#define imageVersion 0xCECE0008
+#define imageVersion 0xCECE000A
 
 uint32_t cpuEvents;
 volatile bool exiting;
@@ -43,6 +29,7 @@ void throttle_interval_event(int index) {
 }
 
 bool emu_save_rom(const char *file) {
+    bool success = false;
     FILE *savedRom = fopen(file, "wb");
     if (!savedRom) {
         return false;
@@ -50,11 +37,7 @@ bool emu_save_rom(const char *file) {
 
     gui_set_busy(true);
 
-    if (!savedRom) {
-        return false;
-    }
-
-    bool success = (fwrite(mem.flash.block, 1, flash_size, savedRom) == flash_size);
+    success = (fwrite(mem.flash.block, 1, flash_size, savedRom) == flash_size);
 
     fclose(savedRom);
 
@@ -64,10 +47,17 @@ bool emu_save_rom(const char *file) {
 }
 
 bool emu_save(const char *file) {
-    FILE *savedImage = fopen_utf8(file, "wb");
+    FILE *savedImage = NULL;
+    emu_image_t *image = NULL;
     size_t size = sizeof(emu_image_t);
-    emu_image_t* image = (emu_image_t*)malloc(size);
     bool success = false;
+
+    savedImage = fopen_utf8(file, "wb");
+    if (!savedImage) {
+        return false;
+    }
+
+    image = (emu_image_t*)malloc(size);
 
     gui_set_busy(true);
 
@@ -83,10 +73,11 @@ bool emu_save(const char *file) {
         image->version = imageVersion;
 
         success = (fwrite(image, 1, size, savedImage) == size);
-    } while(0);
+    } while (0);
 
     free(image);
     fclose(savedImage);
+
     gui_set_busy(false);
 
     return success;
@@ -100,7 +91,7 @@ bool emu_start(const char *romImage, const char *savedImage) {
     gui_set_busy(true);
 
     do {
-        if(savedImage != NULL) {
+        if (savedImage != NULL) {
             emu_image_t *image;
             imageFile = fopen_utf8(savedImage, "rb");
 
@@ -117,15 +108,15 @@ bool emu_start(const char *romImage, const char *savedImage) {
             if (fseek(imageFile, 0L, SEEK_SET) < 0) {
                 break;
             }
-            if((size_t)lSize < sizeof(emu_image_t)) {
+            if ((size_t)lSize < sizeof(emu_image_t)) {
                 break;
             }
 
             image = (emu_image_t*)malloc(lSize);
-            if(!image) {
+            if (!image) {
                 break;
             }
-            if(fread(image, lSize, 1, imageFile) != 1) {
+            if (fread(image, lSize, 1, imageFile) != 1) {
                 free(image);
                 break;
             }
@@ -137,7 +128,7 @@ bool emu_start(const char *romImage, const char *savedImage) {
             asic_init();
             asic_reset();
 
-            if(image->version != imageVersion || !asic_restore(image)) {
+            if (image->version != imageVersion || !asic_restore(image)) {
                 emu_cleanup();
                 free(image);
                 break;
@@ -176,10 +167,6 @@ bool emu_start(const char *romImage, const char *savedImage) {
 
                         /* Read whole ROM. */
                         if (fread(mem.flash.block, 1, lSize, romFile) < (size_t)lSize) {
-                            break;
-                        }
-
-                        if (mem.flash.block[0x7E] == 0xFE) {
                             break;
                         }
 
@@ -285,14 +272,14 @@ bool emu_start(const char *romImage, const char *savedImage) {
                             set_device_type(device_type);
                         }
                     }
-                } while(0);
+                } while (0);
 
                 if (romFile) {
                     fclose(romFile);
                 }
             }
         }
-    } while(0);
+    } while (0);
 
     if (imageFile) {
         fclose(imageFile);
@@ -345,10 +332,10 @@ static void emu_main_loop_inner(void) {
             sched_process_pending_events();
             cpu_execute();
         } else {
-            gui_emu_sleep();
+            gui_emu_sleep(50);
         }
     } else {
-        gui_emu_sleep();
+        gui_emu_sleep(50);
     }
 }
 

@@ -65,7 +65,7 @@ void sched_update_next_event(void) {
     }
     cpu.next = sched.nextCPUtick;
 #ifdef DEBUG_SUPPORT
-    if (!cpu.halted && cpuEvents & EVENT_DEBUG_STEP) {
+    if (!cpu.halted && (cpuEvents & EVENT_DEBUG_STEP)) {
         cpu.next = debugger.cpu_cycles + 1;
     }
 #endif
@@ -161,7 +161,7 @@ bool sched_restore(const emu_image *s) {
     for(i = 0; i < SCHED_NUM_ITEMS; i++) {
         struct sched_item j = s->sched.items[i];
         j.proc = sched.items[i].proc;
-        if(!j.proc) {
+        if (!j.proc) {
             abort();
         }
         sched.items[i] = j;

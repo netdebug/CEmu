@@ -47,8 +47,7 @@ static uint64_t gpt_next_event(int index) {
         }
         next = (uint64_t)(timer->counter ^ invert) - invert;
         for (event = 1; event >= 0; event--) {
-            uint32_t temp;
-            temp = (timer->counter - timer->match[event] + invert) ^ invert;
+            uint32_t temp = (timer->counter - timer->match[event] + invert) ^ invert;
             if (!temp) {
                 status |= 1 << event;
             } else if (temp < next) {
@@ -56,15 +55,15 @@ static uint64_t gpt_next_event(int index) {
             }
         }
         gpt.status |= (status & ~gpt.raw_status[index]) << index * 3;
-        intrpt_set(INT_TIMER1 + index, status);
+        intrpt_set(INT_TIMER1 << index, status);
         gpt.raw_status[index] = next ? 0 : status;
-        intrpt_set(INT_TIMER1 + index, gpt.raw_status[index]);
+        intrpt_set(INT_TIMER1 << index, gpt.raw_status[index]);
         timer->counter -= ((uint32_t)next + invert) ^ invert;
         item->clock = (gpt.control >> index*3 & 2) ? CLOCK_32K : CLOCK_CPU;
         return next;
     }
     gpt.raw_status[index] = 0;
-    intrpt_set(INT_TIMER1 + index, 0);
+    intrpt_set(INT_TIMER1 << index, 0);
     return 0;
 }
 
@@ -121,7 +120,8 @@ static void gpt_write(uint16_t address, uint8_t value, bool peek) {
 
 void gpt_reset() {
     int timer;
-    memset(&gpt, 0, sizeof(gpt) - sizeof(gpt.revision));
+    memset(&gpt, 0, sizeof(gpt));
+    gpt.revision = 0x00010801;
     for(timer = SCHED_TIMER1; timer <= SCHED_TIMER3; timer++) {
         gpt_refresh(timer);
         sched.items[timer].proc = gpt_event;
@@ -138,7 +138,6 @@ static const eZ80portrange_t device = {
 };
 
 eZ80portrange_t init_gpt(void) {
-    gpt.revision = 0x00010801;
     gui_console_printf("[CEmu] Initialized GP timers...\n");
     return device;
 }

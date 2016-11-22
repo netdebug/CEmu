@@ -32,8 +32,8 @@ static uint8_t control_read(const uint16_t pio, bool peek) {
             break;
         case 0x0F:
             value = control.ports[index];
-            if(control.USBBusPowered)    { value |= 0x80; }
-            if(control.USBSelfPowered) { value |= 0x40; }
+            if (control.USBBusPowered)    { value |= 0x80; }
+            if (control.USBSelfPowered) { value |= 0x40; }
             break;
         case 0x1D: case 0x1E: case 0x1F:
             value = read8(control.privileged, (index - 0x1D) << 3);
@@ -68,7 +68,7 @@ static void control_write(const uint16_t pio, const uint8_t byte, bool peek) {
     switch (index) {
         case 0x00:
             control.ports[index] = byte;
-            if(byte & 0x10) {
+            if (byte & 0x10) {
                 cpuEvents |= EVENT_RESET;
             }
             switch (control.readBatteryStatus) {
@@ -105,12 +105,6 @@ static void control_write(const uint16_t pio, const uint8_t byte, bool peek) {
                     break;
             }
             gui_console_printf("[CEmu] CPU clock rate set to: %d MHz\n", 6*(1<<(control.cpuSpeed & 3)));
-#ifdef DEBUG_SUPPORT
-            if (cpuEvents & EVENT_DEBUG_STEP) {
-                cpuEvents &= ~EVENT_DEBUG_STEP;
-                open_debugger(DBG_STEP, 0);
-            }
-#endif
             break;
         case 0x06:
             mem.flash.locked = (byte & 4) == 0;

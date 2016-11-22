@@ -12,10 +12,9 @@ extern "C" {
 
 typedef struct {
     bool hit_pc;
-    bool hit_read_breakpoint;
-    bool hit_write_breakpoint;
+    bool hit_read_watchpoint;
+    bool hit_write_watchpoint;
     bool hit_exec_breakpoint;
-    bool hit_run_breakpoint;
     int32_t inst_address;
 } disasm_highlights_state_t;
 
