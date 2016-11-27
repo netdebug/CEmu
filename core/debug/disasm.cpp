@@ -1030,4 +1030,14 @@ void disassembleInstruction(void) {
     }
 }
 
+#include <iostream>
+extern "C" {
+void debugInstruction(void) {
+    disasm.base_address = cpu.registers.PC;
+    disasm.adl = cpu.ADL;
+    disassembleInstruction();
+    std::cerr << disasm.instruction.opcode << disasm.instruction.mode_suffix << '\t' << disasm.instruction.arguments << std::endl;
+}
+}
+
 #endif
