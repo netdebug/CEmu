@@ -355,10 +355,11 @@ private:
     void ipcHandleCommandlineReceive(QDataStream &);
 
     // Lua
-    void initLuaThings();
+    void initLuaThings(sol::state &lua, bool isREPL);
     void loadLuaScript();
     void saveLuaScript();
     void runLuaScript();
+    void LuaREPLeval();
 
 #ifdef _WIN32
     // Win32 Console Toggle
@@ -432,7 +433,8 @@ private:
     bool initPassed = true;
     bool enabledSoftCommands;
 
-    sol::state lua;
+    sol::state ed_lua;
+    sol::state repl_lua;
 };
 
 #endif
