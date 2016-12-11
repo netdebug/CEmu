@@ -299,6 +299,7 @@ private:
     void saveSelected();
 
     // Autotester
+    void pressKeyFromName(const std::string&);
     void dispAutotesterError(int);
     int openJSONConfig(const QString&);
     void prepareAndOpenJSONConfig();

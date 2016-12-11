@@ -33,7 +33,6 @@
 
 #include "../../tests/autotester/crc32.hpp"
 #include "../../tests/autotester/autotester.h"
-#include "../../tests/autotester/autotester.h"
 
 static const constexpr int WindowStateVersion = 0;
 
@@ -1102,6 +1101,12 @@ void MainWindow::saveSelected() {
 // ------------------------------------------------
 // Autotester things
 // ------------------------------------------------
+
+void MainWindow::pressKeyFromName(const std::string& key)
+{
+    autotester::pressKeyFromName(key);
+    autotester::stepCallback();
+}
 
 void MainWindow::dispAutotesterError(int errCode) {
     QString errMsg;
